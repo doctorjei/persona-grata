@@ -1,0 +1,43 @@
+personal_store: "$XDG_CONFIG_HOME/personas"
+personas:
+  navigator:
+    pid: "orion"
+    name: "Orion Pax Toolkit"
+    home: "{{persona_store}}/{{pid}}"
+    mind:
+      endpoint: "https://api.cybertron.space"
+      model: "alpha-3-on"
+      token_path: "{{home}}/token"
+    harnesses:
+      claude:
+        hid: "claude"
+        harness_desc: "Claude Code"
+        config_path: "{{home}}/{{hid}}"
+        config_file: "{{config_path}}/settings.json"
+        auth_env: "ANTHROPIC_AUTH_TOKEN"
+        config_env: "CLAUDE_CONFIG_DIR"
+        template: |
+          {
+            "model": "sonnet",
+            "env": {
+              "ANTHROPIC_BASE_URL": "{{endpoint}}",
+              "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{model}}",
+              "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{model}}",
+              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{model}}"
+            }
+          }
+      codex:
+        hid: "codex"
+        harness_desc: "Codex CLI"
+        config_path: "{{home}}/{{hid}}"
+        config_file: "{{config_path}}/config.toml"
+        auth_env: "API_KEY"
+        config_env: "CODEX_HOME"
+        template: |
+          model = "{{model}}"
+          model_provider = "{{pid}}"
+          [model_providers.{{pid}}]
+          name = "{{name}}"
+          base_url = "{{endpoint}}"
+          wire_api = "responses"
+          env_key = "{{auth_env}}"
