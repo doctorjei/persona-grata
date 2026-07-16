@@ -24,6 +24,11 @@ personas:
               "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{mind.model}}"
             }
           }
+        verify:                                   # optional; omit to skip the key check
+          url: "{{mind.endpoint}}/v1/messages"
+          key_header: "x-api-key:"                # runtime appends " <key>"
+          headers:                                # only NON-shared headers; content-type is a built-in default
+            - "anthropic-version: 2023-06-01"
       codex:
         harness_desc: "Codex CLI"
         path: "{{path}}/{{__PARENT__.__KEY__}}"
@@ -38,3 +43,6 @@ personas:
           base_url = "{{mind.endpoint}}"
           wire_api = "responses"
           env_key = "{{auth_env}}"
+        verify:                                   # no extra headers -> content-type default only
+          url: "{{mind.endpoint}}/v1/chat/completions"
+          key_header: "Authorization: Bearer"
