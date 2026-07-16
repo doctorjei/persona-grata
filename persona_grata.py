@@ -26,10 +26,7 @@ def resolve_env_vars_fixed(text):
         return text
 
     def replace_match(match):
-        # match.group(1) is the variable name for $VAR
-        # match.group(2) is the variable name for ${VAR}
         var_name = match.group(1) or match.group(2)
-
         if not var_name:
             return match.group(0)
 
@@ -45,15 +42,28 @@ def resolve_env_vars_fixed(text):
         print(f"Warning: Environment variable '${var_name}' is not defined and has no default. Using empty string.")
         return ""
 
-    # Use a raw string for the regex.
-    # The pattern matches:
-    # 1. A literal dollar sign followed by a valid identifier: $([a-zA-Z_][a-zA-Z0-9_]*)
-    # 2. OR a literal dollar sign and curly braces: $\{([a-zA-Z_][a-zA-Z0-9_]*)\}
-    return re.sub(r"\$([a-zA-Z_][a-zA-Z0-9_]*)|\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}", replace_match, text)
+    return re.sub(r"$([a-zA-Z_][a-zA-Z0-9_]*)|$\{([a-zA-Z_][a-zA-Z0-9_]*)\}", replace_match, text)
 
-def resolve_template(template, context):
+def get_hierarchical_value(config, path):
     """
-    Recursively resolve {{variable}} placeholders in a string using the provided context.
+    Retrieves a value from a nested dictionary using dot-notation (e.g., 'personas.orion.model').
+    """
+    keys = path.split('.')
+    current = config
+    for key in keys:
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+        else:
+            return None
+    return current
+
+def resolve_template(template, context, config=None, parent_key=None):
+    """
+    Recursively resolve {{variable}} placeholders in a string.
+    Supports:
+    - context lookup: {{var}}
+    - absolute dot-notation lookup: {{personas.orion.model}}
+    - reserved parent identifier: {{__PARENT__}}
     """
     if not isinstance(template, str):
         return template
@@ -63,8 +73,22 @@ def resolve_template(template, context):
         prev_template = template
         matches = re.findall(r"\{\{(.*?)\}\}", template)
         for var in matches:
-            if var in context:
-                template = template.replace(f"{{{{{var}}}}}", str(context[var]))
+            resolved_val = None
+            
+            # 1. Handle reserved __PARENT__
+            if var == "__PARENT__":
+                resolved_val = parent_key
+                
+            # 2. Handle absolute dot-notation references
+            elif config and "." in var:
+                resolved_val = get_hierarchical_value(config, var)
+                
+            # 3. Handle context lookup
+            elif var in context:
+                resolved_val = context[var]
+                
+            if resolved_val is not None:
+                template = template.replace(f"{{{{{var}}}}}", str(resolved_val))
     return template
 
 def setup_harness(persona_name, harness_name, config):
@@ -77,10 +101,14 @@ def setup_harness(persona_name, harness_name, config):
         print(f"Error: Harness '{harness_name}' not supported for persona '{persona_name}'.")
         sys.exit(1)
 
+    # Context for template resolution
+    ctx = {}
+    
     # Resolve global store
     raw_store = config.get('personal_store', "/personas")
-    resolved_store = resolve_env_vars_fixed(resolve_template(raw_store, ctx))
-    ctx = {"persona_store": resolved_store}
+    # Store has no specific parent key in the config tree (root level)
+    resolved_store = resolve_env_vars_fixed(resolve_template(raw_store, ctx, config, parent_key=None))
+    ctx["persona_store"] = resolved_store
 
     if not resolved_store or resolved_store.strip() == "":
         print("Error: Resolved persona_store path is empty. Check your environment variables.")
@@ -93,8 +121,9 @@ def setup_harness(persona_name, harness_name, config):
     ctx["name"] = ctx["persona_name"]
 
     # Resolve Persona Home
+    # Parent key for persona home is the persona's ID/key in the 'personas' dict
     raw_home = persona_cfg.get('home', "{{persona_store}}/{{pid}}")
-    ctx["home"] = resolve_env_vars_fixed(resolve_template(raw_home, ctx))
+    ctx["home"] = resolve_env_vars_fixed(resolve_template(raw_home, ctx, config, parent_key=persona_name))
 
     if not ctx["home"]:
         print("Error: Resolved persona home path is empty.")
@@ -103,7 +132,7 @@ def setup_harness(persona_name, harness_name, config):
     # Resolve Token Path
     mind = persona_cfg.get('mind', {})
     raw_token_path = mind.get('token_path', "{{home}}/token")
-    ctx["token_path"] = resolve_env_vars_fixed(resolve_template(raw_token_path, ctx))
+    ctx["token_path"] = resolve_env_vars_fixed(resolve_template(raw_token_path, ctx, config, parent_key=persona_name))
 
     if not ctx["token_path"]:
         print("Error: Resolved token path is empty.")
@@ -115,15 +144,16 @@ def setup_harness(persona_name, harness_name, config):
     ctx["hid"] = hid
 
     # Resolve Harness Config Path and File
+    # Parent key here is the harness's ID/key within the persona's harness map
     raw_config_path = harness_cfg.get('config_path', "{{home}}/{{hid}}")
-    ctx["config_path"] = resolve_env_vars_fixed(resolve_template(raw_config_path, ctx))
+    ctx["config_path"] = resolve_env_vars_fixed(resolve_template(raw_config_path, ctx, config, parent_key=harness_name))
 
     if not ctx["config_path"]:
         print("Error: Resolved config path is empty.")
         sys.exit(1)
 
     raw_config_file = harness_cfg.get('config_file', "{{config_path}}/config.toml")
-    ctx["config_file"] = resolve_env_vars_fixed(resolve_template(raw_config_file, ctx))
+    ctx["config_file"] = resolve_env_vars_fixed(resolve_template(raw_config_file, ctx, config, parent_key=harness_name))
 
     if not ctx["config_file"]:
         print("Error: Resolved config file path is empty.")
@@ -157,7 +187,8 @@ def setup_harness(persona_name, harness_name, config):
     ctx["auth_env"] = harness_cfg.get('auth_env', '')
 
     template = harness_cfg['template']
-    rendered = resolve_template(template, ctx)
+    # Final config render - parent key is the harness name
+    rendered = resolve_template(template, ctx, config, parent_key=harness_name)
 
     with open(ctx["config_file"], 'w') as f:
         f.write(rendered)
