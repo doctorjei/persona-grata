@@ -1,6 +1,6 @@
 persona_store: "$XDG_CONFIG_HOME/personas"
 personas:
-  orion:  ## self == current K/V node.
+  orion:
     persona_desc: "Orion Pax Toolkit"
     path: "{{persona_store}}/{{__PARENT__.__KEY__}}"
     mind:
@@ -24,10 +24,10 @@ personas:
               "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{mind.model}}"
             }
           }
-        verify:                                   # optional; omit to skip the key check
+        verify:                                 # optional; omitting skips check
           url: "{{mind.endpoint}}/v1/messages"
-          key_header: "x-api-key:"                # runtime appends " <key>"
-          headers:                                # only NON-shared headers; content-type is a built-in default
+          key_header: "x-api-key:"              # runtime appends " <key>"
+          headers:                              # Non-shared headers (optional)
             - "anthropic-version: 2023-06-01"
       codex:
         harness_desc: "Codex CLI"
@@ -43,6 +43,6 @@ personas:
           base_url = "{{mind.endpoint}}"
           wire_api = "responses"
           env_key = "{{auth_env}}"
-        verify:                                   # no extra headers -> content-type default only
+        verify:
           url: "{{mind.endpoint}}/v1/chat/completions"
           key_header: "Authorization: Bearer"
