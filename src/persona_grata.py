@@ -29,8 +29,7 @@ ENV_DEFAULTS = {
 # for every harness and only injects the persona's model.
 VERIFY_TIMEOUT = 10
 DEFAULT_VERIFY_HEADERS = ["content-type: application/json"]
-DEFAULT_BODY = """{"model": "{%s}","max_tokens": 16, "messages":
-                   [{"role": "user", "content": "ping"}]}"""
+DEFAULT_BODY = """{"model": "%s", "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]}"""
 
 def load_config(path="agents.yaml", env_defaults=None):
     """Read + fully resolve an agents.yaml file into a plain dict tree."""
@@ -48,11 +47,11 @@ def _require(mapping, key, kind):
 # --------------------------------------------------------------------------- #
 # Token acquisition + verification
 # --------------------------------------------------------------------------- #
-def _prompt_key(persona_name):
+def _prompt_key(persona_desc):
     """Prompt (hidden) until a non-empty key is entered; exit on EOF."""
     while True:
         try:
-            key = getpass.getpass(f"Paste your {persona_name} API key, then press Enter: ")
+            key = getpass.getpass(f"Paste your {persona_desc} API key here: ")
         except EOFError:
             print("Error: No input received.", file=sys.stderr)
             sys.exit(1)
@@ -101,8 +100,8 @@ def _verify_key(verify, model, key):
     url = verify["url"]
     headers = DEFAULT_VERIFY_HEADERS + list(verify.get("headers", []))
     body = verify.get("body") or DEFAULT_BODY % model
-
     req = urllib.request.Request(url, data=body.encode(), method="POST")
+
     for line in headers:
         _add_header(req, line)
     if verify.get("key_header"):
@@ -139,28 +138,35 @@ def _write_token(token_path, key):
 # --------------------------------------------------------------------------- #
 # Setup
 # --------------------------------------------------------------------------- #
-def setup_harness(persona_name, harness_name, config):
+def setup_harness(persona_id, harness_id, config):
     personas = _require(config, "personas", "section")
-    persona = _require(personas, persona_name, "Persona")
+    persona = _require(personas, persona_id, "persona")
     harnesses = _require(persona, "harnesses", "section")
-    harness = _require(harnesses, harness_name, "Harness")
+    harness = _require(harnesses, harness_id, "harness")
 
+    persona_desc = persona.get("persona_desc", persona_id)
+    model = persona.get("mind", {}).get("model", "")
     home = Path(persona["path"])
     token_path = Path(persona["mind"]["token_path"])
+
+    harness_desc = harness.get("harness_desc", "harness")
     config_dir = Path(harness["path"])
     config_file = Path(harness["config_file"])
     config_env = harness.get("config_env", "")
     auth_env = harness.get("auth_env", "")
     template = harness["template"]
     verify = harness.get("verify")
-    model = persona.get("mind", {}).get("model", "")
+
+    print("\n===========================================================================")
+    print(f"    {persona_desc} & {harness_desc} Setup Script")
+    print("===========================================================================\n")
 
     # 1. Token: keep an existing one on request, else prompt + verify + write.
     #    Verification runs before anything is written, so a bad key writes nothing.
-    if token_path.exists() and not _confirm("Replace authorization token?"):
-        print(f"Keeping existing token at {token_path}")
+    if token_path.exists() and not _confirm("Replace existing authorization token?"):
+        print(f" - Keeping existing token at {token_path}.")
     else:
-        key = _prompt_key(persona_name)
+        key = _prompt_key(persona_desc)
         _verify_key(verify, model, key)
         _write_token(token_path, key)
 
@@ -177,36 +183,42 @@ def setup_harness(persona_name, harness_name, config):
     config_file.write_text(template)
 
     # 5. Shell wrapper
-    _install_shell_wrapper(persona_name, harness_name, config_dir, token_path,
-                           config_env, auth_env)
+    _install_shell_wrapper(persona_id, persona_desc,
+      harness_id, harness_desc, config_dir, token_path, config_env, auth_env)
 
-
-def _install_shell_wrapper(persona_name, harness_name, config_dir, token_path,
-                           config_env, auth_env):
+def _install_shell_wrapper(persona_id, persona_desc,
+      harness_id, harness_desc, config_dir, token_path, config_env, auth_env):
     shell = os.environ.get("SHELL", "/bin/bash")
     rc_file = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
-    cmd_name = f"{persona_name}-{harness_name}"
+    cmd_name = f"{persona_id}-{harness_id}"
 
     wrapper = f"""
-# >>> {persona_name} & {harness_name} >>>
+# >>> {persona_desc} & {harness_desc} >>>
 {cmd_name}() {{
   {config_env}="{config_dir}" \\
   {auth_env}="$(cat {token_path})" \\
-  command {harness_name} "$@"
+  command {harness_id} "$@"
 }}
-# <<< {persona_name} & {harness_name} <<<
+# <<< {persona_desc} & {harness_desc} <<<
 """
 
     content = rc_file.read_text() if rc_file.exists() else ""
     pattern = re.compile(
-        rf"# >>> {re.escape(persona_name)} & {re.escape(harness_name)} >>>.*?"
-        rf"# <<< {re.escape(persona_name)} & {re.escape(harness_name)} <<<",
+        rf"# >>> {re.escape(persona_desc)} & {re.escape(harness_desc)} >>>.*?"
+        rf"# <<< {re.escape(persona_desc)} & {re.escape(harness_desc)} <<<",
         re.DOTALL,
     )
     content = pattern.sub("", content).strip()
     rc_file.write_text(content + "\n\n" + wrapper)
 
-    print(f"Success! Run 'source {rc_file}' and then use the command: {cmd_name}")
+    print("Setup complete.\n")
+    print("Setup Notes")
+    print("-----------")
+    print(f"1. Before use, open a new terminal or run `source {rc_file}`.")
+    print(f"2. Running {harness_id} still uses its native models (settings unchanged).\n")
+    print(f"To run {persona_desc} with {harness_desc}")
+    print("----------------------------------------------------------------------------")
+    print(f"> {persona_id}-{harness_id}\n")
 
 
 if __name__ == "__main__":
