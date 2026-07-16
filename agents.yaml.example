@@ -1,43 +1,40 @@
-personal_store: "$XDG_CONFIG_HOME/personas"
+persona_store: "$XDG_CONFIG_HOME/personas"
 personas:
-  navigator:
-    pid: "orion"
-    name: "Orion Pax Toolkit"
-    home: "{{persona_store}}/{{pid}}"
+  orion:  ## self == current K/V node.
+    persona_desc: "Orion Pax Toolkit"
+    path: "{{persona_store}}/{{__PARENT__.__KEY__}}"
     mind:
       endpoint: "https://api.cybertron.space"
       model: "alpha-3-on"
-      token_path: "{{home}}/token"
+      token_path: "{{path}}/token"
     harnesses:
       claude:
-        hid: "claude"
         harness_desc: "Claude Code"
-        config_path: "{{home}}/{{hid}}"
-        config_file: "{{config_path}}/settings.json"
+        path: "{{path}}/{{__PARENT__.__KEY__}}"
+        config_file: "{{path}}/settings.json"
         auth_env: "ANTHROPIC_AUTH_TOKEN"
         config_env: "CLAUDE_CONFIG_DIR"
         template: |
           {
             "model": "sonnet",
             "env": {
-              "ANTHROPIC_BASE_URL": "{{endpoint}}",
-              "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{model}}",
-              "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{model}}",
-              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{model}}"
+              "ANTHROPIC_BASE_URL": "{{mind.endpoint}}",
+              "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{mind.model}}",
+              "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{mind.model}}",
+              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{mind.model}}"
             }
           }
       codex:
-        hid: "codex"
         harness_desc: "Codex CLI"
-        config_path: "{{home}}/{{hid}}"
-        config_file: "{{config_path}}/config.toml"
+        path: "{{path}}/{{__PARENT__.__KEY__}}"
+        config_file: "{{path}}/config.toml"
         auth_env: "API_KEY"
         config_env: "CODEX_HOME"
         template: |
-          model = "{{model}}"
-          model_provider = "{{pid}}"
-          [model_providers.{{pid}}]
-          name = "{{name}}"
-          base_url = "{{endpoint}}"
+          model = "{{mind.model}}"
+          model_provider = "{{harnesses.__PARENT__.__KEY__}}"
+          [model_providers.{{harnesses.__PARENT__.__KEY__}}]
+          name = "{{persona_desc}}"
+          base_url = "{{mind.endpoint}}"
           wire_api = "responses"
           env_key = "{{auth_env}}"
