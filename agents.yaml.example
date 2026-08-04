@@ -1,40 +1,29 @@
-persona_store: "$XDG_CONFIG_HOME/personas"
+persona_store: "~/.alternative_config/personas"
+
 personas:
-  orion:  ## self == current K/V node.
-    persona_desc: "Orion Pax Toolkit"
-    path: "{{persona_store}}/{{__PARENT__.__KEY__}}"
+  easy_api:
+    mind:
+      endpoint: "https://api.easypeasy.org"
+
+  orion:
+    persona_desc: "Orion Toolkit"
     mind:
       endpoint: "https://api.cybertron.space"
       model: "alpha-3-on"
-      token_path: "{{path}}/token"
     harnesses:
       claude:
-        harness_desc: "Claude Code"
-        path: "{{path}}/{{__PARENT__.__KEY__}}"
-        config_file: "{{path}}/settings.json"
-        auth_env: "ANTHROPIC_AUTH_TOKEN"
-        config_env: "CLAUDE_CONFIG_DIR"
-        template: |
-          {
-            "model": "sonnet",
-            "env": {
-              "ANTHROPIC_BASE_URL": "{{mind.endpoint}}",
-              "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{mind.model}}",
-              "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{mind.model}}",
-              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{mind.model}}"
-            }
-          }
+        base_uri: "{{mind.endpoint}}/anthropic"
       codex:
-        harness_desc: "Codex CLI"
-        path: "{{path}}/{{__PARENT__.__KEY__}}"
-        config_file: "{{path}}/config.toml"
-        auth_env: "API_KEY"
-        config_env: "CODEX_HOME"
-        template: |
-          model = "{{mind.model}}"
-          model_provider = "{{harnesses.__PARENT__.__KEY__}}"
-          [model_providers.{{harnesses.__PARENT__.__KEY__}}]
-          name = "{{persona_desc}}"
-          base_url = "{{mind.endpoint}}"
-          wire_api = "responses"
-          env_key = "{{auth_env}}"
+        base_uri: "{{mind.endpoint}}/openai"
+
+  pax:
+    persona_desc: "Pax Toolkit"
+    mind:
+      endpoint: "https://api.moonbase.space"
+    harnesses:
+      claude:
+        harness_desc: "Sneaky Claude"
+        path: "~/my/secret/claude"
+        verify:
+          url: "{{base_uri}}/verify_me"
+          key_header: "x-api-key:" # If the service only supports traditional Anthropic-style keys

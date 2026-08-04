@@ -1,0 +1,6 @@
+##################################################################################################
+# Agent Default Entries - Top Level
+#
+
+persona_store: "$XDG_CONFIG_HOME/personas" # Persona config path (endpoint, harnesses, etc.)
+personas: None                             # Map/Dict: {(<persona>: <settings>)*} <REQUIRED>
