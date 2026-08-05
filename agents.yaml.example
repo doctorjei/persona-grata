@@ -7,9 +7,11 @@ personas:
 
   orion:
     persona_desc: "Orion Toolkit"
+
     mind:
       endpoint: "https://api.cybertron.space"
       model: "alpha-3-on"
+
     harnesses:
       claude:
         base_uri: "{{mind.endpoint}}/anthropic"
@@ -24,6 +26,7 @@ personas:
       claude:
         harness_desc: "Sneaky Claude"
         path: "~/my/secret/claude"
+
         verify:
           url: "{{base_uri}}/verify_me"
           key_header: "x-api-key:" # If the service only supports traditional Anthropic-style keys
