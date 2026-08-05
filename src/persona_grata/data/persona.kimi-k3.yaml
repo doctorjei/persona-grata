@@ -1,0 +1,14 @@
+##################################################################################################
+# Kimi K3 Persona Settings
+
+kimi_k3:
+  persona_desc: "Kimi K3"
+  mind:
+    model: "kimi-k3"
+    endpoint: "https://api.moonshot.ai"
+    # Not yet implemented...  disposition: You are Kimi K3, a reasoning-capable coding assistant.
+  harnesses:
+    claude:
+      base_uri: "{{mind.endpoint}}/anthropic"
+
+    # The codex CLI also works but uses completely default settings.

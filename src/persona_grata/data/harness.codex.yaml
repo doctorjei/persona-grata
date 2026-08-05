@@ -1,0 +1,16 @@
+
+##################################################################################################
+# Codex-CLI Harness Settings
+
+codex:
+  harness_desc: "Codex CLI"
+  config_file: "{{path}}/config.toml"
+  config_env: "CODEX_HOME"
+  template: |
+    model = "{{mind.model}}"
+    model_provider = "{{harnesses.__PARENT__.__KEY__}}"
+    [model_providers.{{harnesses.__PARENT__.__KEY__}}]
+    name = "{{persona_desc}}"
+    base_url = "{{mind.endpoint}}"
+    wire_api = "responses"
+    env_key = "{{auth_env}}"

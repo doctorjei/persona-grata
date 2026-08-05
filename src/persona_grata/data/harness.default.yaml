@@ -1,0 +1,17 @@
+##################################################################################################
+# Harness Default Settings
+
+harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
+path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
+config_file: ""                                  # Main harness config file (skips if empty/unset)
+auth_env: "API_KEY"                              # Env. variable holding key/token
+config_env: ""                                   # Store var., harness config path (default: none)
+template: ""                                     # Template, main harness config (default: empty)
+base_uri: "{{mind.endpoint}}"                    # Base URI for remote connections
+verify:                                          # Auth verification settings
+  url: "{{base_uri}}/v1/chat/completions"        # URL for auth verification (default OpenAI std)
+  key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
+  headers: []                                    # List: [<header text>*]
+
+### If user incorporates "verify" but not all parameters, default values will be _copied into_
+### the "verify" block.

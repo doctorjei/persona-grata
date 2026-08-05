@@ -1,0 +1,11 @@
+persona_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
+path: "{{persona_store}}/{{__PARENT__.__KEY__}}" # Persona settings path
+mind:                                            # Cognitive elements (endpoint, model, etc.)
+  endpoint: None                                 # Connection endpoint <REQUIRED in config>
+  model: None                                    # Model to use (not sent if empty/unset)
+  token_path: "{{path}}/token"                   # Auth token/key path (not sent if empty/unset)
+harnesses: None                                  # Map/Dict: {(<harness>: <harness settings>)*}
+
+# All supported harnesses are added in addition to those listed. Set to "None" to disable:
+#    harnesses:
+#      super_coder: None
