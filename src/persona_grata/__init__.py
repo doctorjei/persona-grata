@@ -263,8 +263,8 @@ def setup_harness(persona_id, harness_id, config):
     harness_desc = harness.get("harness_desc", "harness")
     config_dir = Path(harness["path"])
     config_file = Path(harness["config_file"])
-    config_env = harness.get("config_env", "")
-    auth_env = harness.get("auth_env", "")
+    config_var = harness.get("config_var", "")
+    auth_var = harness.get("auth_var", "")
     template = harness["template"]
     verify = harness.get("verify")
 
@@ -295,10 +295,10 @@ def setup_harness(persona_id, harness_id, config):
 
     # 5. Shell wrapper
     _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, config_env, auth_env)
+      harness_id, harness_desc, config_dir, token_path, config_var, auth_var)
 
 def _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, config_env, auth_env):
+      harness_id, harness_desc, config_dir, token_path, config_var, auth_var):
     shell = os.environ.get("SHELL", "/bin/bash")
     rc_file = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
     cmd_name = f"{persona_id}-{harness_id}"
@@ -306,8 +306,8 @@ def _install_shell_wrapper(persona_id, persona_desc,
     wrapper = f"""
 # >>> {persona_desc} & {harness_desc} >>>
 {cmd_name}() {{
-  {config_env}="{config_dir}" \\
-  {auth_env}="$(cat {token_path})" \\
+  {config_var}="{config_dir}" \\
+  {auth_var}="$(cat {token_path})" \\
   command {harness_id} "$@"
 }}
 # <<< {persona_desc} & {harness_desc} <<<

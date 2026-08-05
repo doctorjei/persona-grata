@@ -1,10 +1,14 @@
 ##################################################################################################
-# Kimi K3 Persona Settings
+# Kimi Persona Settings
 
-kimi_k3:
-  persona_desc: "Kimi K3"
+kimi:
+  persona_desc: "Kimi"
   mind:
     model: "kimi-k3"
+    model_1: "kimi-k2.7-code"
+    model_2: "kimi-k2.7-code-highspeed"
+    model_3: "kimi-k2.6"
+    model_4: "kimi-k2.5"
     endpoint: "https://api.moonshot.ai"
     # Not yet implemented...  disposition: You are Kimi K3, a reasoning-capable coding assistant.
   harnesses:

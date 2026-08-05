@@ -2,7 +2,11 @@ persona_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults t
 path: "{{persona_store}}/{{__PARENT__.__KEY__}}" # Persona settings path
 mind:                                            # Cognitive elements (endpoint, model, etc.)
   endpoint: None                                 # Connection endpoint <REQUIRED in config>
-  model: None                                    # Model to use (not sent if empty/unset)
+  model: ""                                      # Primary model (not sent if empty/unset)
+  model_1: ""                                    # Alt. model #1 (not sent if empty/unset)
+  model_2: ""                                    # Alt. model #2 (not sent if empty/unset)
+  model_3: ""                                    # Alt. model #3 (not sent if empty/unset)
+  model_4: ""                                    # Alt. model #4 (not sent if empty/unset)
   token_path: "{{path}}/token"                   # Auth token/key path (not sent if empty/unset)
 harnesses: None                                  # Map/Dict: {(<harness>: <harness settings>)*}
 

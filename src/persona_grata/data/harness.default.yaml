@@ -4,8 +4,8 @@
 harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
 path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
 config_file: ""                                  # Main harness config file (skips if empty/unset)
-auth_env: "API_KEY"                              # Env. variable holding key/token
-config_env: ""                                   # Store var., harness config path (default: none)
+auth_var: "API_KEY"                              # Env. variable holding key/token
+config_var: ""                                   # Store var., harness config path (default: none)
 template: ""                                     # Template, main harness config (default: empty)
 base_uri: "{{mind.endpoint}}"                    # Base URI for remote connections
 verify:                                          # Auth verification settings
