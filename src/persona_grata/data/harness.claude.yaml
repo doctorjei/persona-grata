@@ -3,23 +3,19 @@
 
 claude:
   harness_desc: "Claude Code"
-  config_file: "{{path}}/settings.json"
   auth_var: "ANTHROPIC_AUTH_TOKEN"
-  config_var: "CLAUDE_CONFIG_DIR"
-  config_data:
+  path_var: "CLAUDE_CONFIG_DIR"
+  config_file: "{{path}}/settings.json"
+  config_store:
     model: "{{mind.model}}"
     env:
       ANTHROPIC_BASE_URL: "{{base_uri}}"
       ANTHROPIC_DEFAULT_OPUS_MODEL: "{{mind.model}}"
       ANTHROPIC_DEFAULT_SONNET_MODEL: "{{mind.model}}"
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{mind.model}}"
-  template: |
-    config.data.__AS_JSON__ # should be { <
-    {
-      "model": "sonnet",
-dddasdf      "env": {{env_vars.__AS_JSON__}}
-    }
+  content: "{{config_store.__AS_JSON__()}}"  # should be { model: "foo", env: {{env_var: value}} }
   verify:
     url: "{{base_uri}}/v1/messages"
     headers:
       - "anthropic-version: 2023-06-01"
+

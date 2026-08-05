@@ -4,13 +4,15 @@
 
 codex:
   harness_desc: "Codex CLI"
+  path_var: "CODEX_HOME"
   config_file: "{{path}}/config.toml"
-  config_var: "CODEX_HOME"
-  template: |
-    model = "{{mind.model}}"
-    model_provider = "{{harnesses.__PARENT__.__KEY__}}"
-    [model_providers.{{harnesses.__PARENT__.__KEY__}}]
-    name = "{{persona_desc}}"
-    base_url = "{{mind.endpoint}}"
-    wire_api = "responses"
-    env_key = "{{auth_var}}"
+  config_store:
+    model: "{{mind.model}}"
+    model_provider: "{{harnesses.__PARENT__.__KEY__}}"
+
+　　"model_providers\.{{harnesses.__PARENT__.__KEY__}}":
+      name: "{{persona_desc}}"
+      base_url: "{{mind.endpoint}}"
+      wire_api: "responses"
+      env_key: "{{auth_var}}"
+  content: "{{config_store.__AS_TOML__()}}"

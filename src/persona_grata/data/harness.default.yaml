@@ -3,10 +3,11 @@
 
 harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
 path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
-config_file: ""                                  # Main harness config file (skips if empty/unset)
 auth_var: "API_KEY"                              # Env. variable holding key/token
-config_var: ""                                   # Store var., harness config path (default: none)
-template: ""                                     # Template, main harness config (default: empty)
+path_var: ""                                     # Store var., harness config path (default: none)
+config_file: ""                                  # Main harness config file (skips if empty/unset)
+config_store: {}                                 # Harness config data (stored in config file)
+content: ""                                      # Content of harness config file (default: empty)
 base_uri: "{{mind.endpoint}}"                    # Base URI for remote connections
 verify:                                          # Auth verification settings
   url: "{{base_uri}}/v1/chat/completions"        # URL for auth verification (default OpenAI std)

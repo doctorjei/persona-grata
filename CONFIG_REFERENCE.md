@@ -116,29 +116,33 @@ Short-form description of the harness; defaults to string representation of harn
 
 Path to custom harness settings files.
 
-### `config_file` -> `str`
-- Required: **No**
-- Default: `""`
-
-Main harness config file (defaults to none).
-
-### `auth_env` -> `str`
+### `auth_var` -> `str`
 - Required: **No**
 - Default: `"API_KEY"`
 
 Env. variable holding key/token.
 
-### `config_env` -> `str`
+### `path_var` -> `str`
 - Required: **No**
 - Default: `""`
 
-Store var. for harness config path (def: none).
+Store variable for harness config path.
 
-### `template` -> `str`
+### `config_file` -> `str`
 - Required: **No**
 - Default: `""`
 
-Template for main harness config (known harnesses have individual default values).
+### `config_store` -> `NestedDict`
+- Required: **No**
+- Default: {}
+
+Store of config data, typically used to populate the `content` value. (default: empty dict)
+
+### `content` -> `str`
+- Required: **No**
+- Default: `""`
+
+Content for main harness config (known harnesses have individual default values).
 
 ### `base_uri` -> `str`
 - Required: **No**

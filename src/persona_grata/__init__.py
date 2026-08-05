@@ -263,9 +263,9 @@ def setup_harness(persona_id, harness_id, config):
     harness_desc = harness.get("harness_desc", "harness")
     config_dir = Path(harness["path"])
     config_file = Path(harness["config_file"])
-    config_var = harness.get("config_var", "")
+    path_var = harness.get("path_var", "")
     auth_var = harness.get("auth_var", "")
-    template = harness["template"]
+    content = harness["content"]
     verify = harness.get("verify")
 
     print("\n===========================================================================")
@@ -290,15 +290,15 @@ def setup_harness(persona_id, harness_id, config):
     with os.fdopen(os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
         f.write(str(token_path) + "\n")
 
-    # 4. Render config file (template is already fully resolved by the engine).
-    config_file.write_text(template)
+    # 4. Render config file (content is already fully resolved by the engine).
+    config_file.write_text(content)
 
     # 5. Shell wrapper
     _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, config_var, auth_var)
+      harness_id, harness_desc, config_dir, token_path, path_var, auth_var)
 
 def _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, config_var, auth_var):
+      harness_id, harness_desc, config_dir, token_path, path_var, auth_var):
     shell = os.environ.get("SHELL", "/bin/bash")
     rc_file = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
     cmd_name = f"{persona_id}-{harness_id}"
@@ -306,7 +306,7 @@ def _install_shell_wrapper(persona_id, persona_desc,
     wrapper = f"""
 # >>> {persona_desc} & {harness_desc} >>>
 {cmd_name}() {{
-  {config_var}="{config_dir}" \\
+  {path_var}="{config_dir}" \\
   {auth_var}="$(cat {token_path})" \\
   command {harness_id} "$@"
 }}
