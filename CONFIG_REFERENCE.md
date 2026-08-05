@@ -1,10 +1,21 @@
-# Persona-Grata Configuration Manual
+# Configuration Reference Manual
 
-Persona-Grata general, persona, and harness settings structure and default values can be found in this manual. This document uses the following definitions throughout:
+Persona-Grata general, persona, and harness settings structure and default values can be found in
+this manual. This document uses the following definitions throughout:
 
 `type NestedDict = dict[str, NestedDict | list[str] | str]`
 
-If a value is required, it _must be supplied_ in any custom configuration. Otherwise, a default fallback value will be substituted for any absent keys in the configuration.
+If a value is required, it _must be supplied_ in any custom configuration. Otherwise, a default
+fallback value will be substituted for any absent keys in the configuration.
+
+## Primary Elements
+
+Agents are configured via the definitions of three (3) primary elements:
+
+- **Mind**: The `endpoint`, `model`, and the `token_path` where the API key is stored.
+- **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
+- **Harnesses**: Defines how to render the persona into the harness's native config (e.g., via
+  templates and environment variables).
 
 ---
 

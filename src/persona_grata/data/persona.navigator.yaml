@@ -1,0 +1,8 @@
+##################################################################################################
+# Navigator Toolkit Persona Settings
+
+navigator:
+  persona_desc: "Navigator Toolkit"
+  mind:
+    endpoint: "https://api.ai.it.ufl.edu"
+    model: "gemma-4-31b-it"
