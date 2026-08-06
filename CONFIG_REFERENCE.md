@@ -15,6 +15,10 @@ Two conventions apply throughout:
 - **Unset values are not emitted.** Keys whose value is empty or unset are omitted from rendered
   harness config files, so an unused `mind.model_2` does not become an env. variable set to `""`.
 
+Settings not listed in this manual are reported as warnings and ignored, so a misspelled key is
+visible rather than silent. Persona and harness *names* are yours to choose and are never checked,
+and `config_store` holds free-form harness data that is passed through untouched.
+
 ## Primary Elements
 
 Agents are configured via the definitions of three (3) primary elements:
@@ -220,7 +224,7 @@ List of header lines; may be omitted. `content-type: application/json` is always
 
 #### `verify.body` -> `str`
 - Required: **No**
-- Default: (A minimal `"ping"` completion request using `mind.model`)
+- Default: `""` (a minimal `"ping"` completion request using `mind.model`)
 
 Request body for the verification call. Supply this only if the endpoint rejects the standard
 single-message probe.

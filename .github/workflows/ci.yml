@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ends of the supported range plus the version that gained tomllib,
+        # which the config round-trip tests skip below 3.11.
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      # The data/*.yaml presets are the product; a wheel without them installs
+      # cleanly and then fails at runtime.
+      - name: Verify presets ship in the wheel
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/harness.claude.yaml'
+          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/persona.kimi.yaml'
+      - name: Verify the installed console scripts run
+        run: |
+          pip install dist/*.whl
+          persona-grata --help
+          pg --help

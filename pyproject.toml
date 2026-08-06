@@ -32,6 +32,7 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 persona-grata = "persona_grata:main"
+pg = "persona_grata:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

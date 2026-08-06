@@ -13,6 +13,7 @@ verify:                                          # Auth verification settings
   url: "{{base_uri}}/v1/chat/completions"        # URL for auth verification (default OpenAI std)
   key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
   headers: []                                    # List: [<header text>*]
+  body: ""                                       # Probe body (default: minimal "ping" request)
 
 ### If user incorporates "verify" but not all parameters, default values will be _copied into_
 ### the "verify" block.

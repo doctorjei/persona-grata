@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import copy
+import shutil
 import getpass
 import urllib.request
 import urllib.error
@@ -44,11 +45,18 @@ _UNSET_TOKENS = {"none", "null"}
 
 USAGE = """\
 Usage:
-  persona-grata <persona> [harness ...]
-  persona-grata <agents.yaml> [persona] [harness ...]
+  persona-grata [--remove] <persona> [harness ...]
+  persona-grata [--remove] <agents.yaml> [persona] [harness ...]
 
-Omit the harness names to set up every harness known to that persona; omit the
-persona too to set up every persona in the configuration."""
+Omit the harness names to act on every harness known to that persona; omit the
+persona too to act on every persona in the configuration.
+
+  -r, --remove   Remove the shell wrapper and config directory instead of
+                 installing them. Offers to delete the persona's token once
+                 all of its harnesses are gone.
+  -h, --help     Show this message.
+
+`pg` is a shorter alias for `persona-grata`."""
 
 
 def deep_merge(source, destination):
@@ -143,6 +151,41 @@ def declared_personas(path, env_defaults=None):
     return list(_normalize_personas(user_cfg)["personas"])
 
 
+def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema):
+    """Warn about settings keys the schema does not define.
+
+    A misspelled key is otherwise silent: it merges into the tree, nothing reads
+    it, and setup quietly uses the default. Persona and harness *names* are the
+    user's to invent, so only their settings are checked, and ``config_store``
+    is free-form harness data that is deliberately not validated.
+    """
+    warnings = []
+
+    def check(mapping, allowed, where):
+        if not isinstance(mapping, dict):
+            return
+        for key in mapping:
+            if key not in allowed:
+                warnings.append(f"{where}{key}")
+
+    check(user_cfg, top_schema, "")
+    for pid, persona in (user_cfg.get("personas") or {}).items():
+        if not isinstance(persona, dict):
+            continue
+        check(persona, persona_schema, f"personas.{pid}.")
+        check(persona.get("mind"), persona_schema.get("mind") or {}, f"personas.{pid}.mind.")
+        for hid, harness in (persona.get("harnesses") or {}).items():
+            if not isinstance(harness, dict):
+                continue
+            base = f"personas.{pid}.harnesses.{hid}."
+            check(harness, harness_schema, base)
+            check(harness.get("verify"), harness_schema.get("verify") or {}, f"{base}verify.")
+
+    for path in warnings:
+        print(f"Warning: unknown setting '{path}' — ignored (check spelling).", file=sys.stderr)
+    return warnings
+
+
 def _drop_disabled(config):
     """Remove personas/harnesses the configuration switched off with ``None``."""
     personas = _ensure_dict(config, "personas")
@@ -192,6 +235,13 @@ def load_config(path=None, env_defaults=None):
     persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
     harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
     known_harnesses = preset_names("harness")
+
+    # The .default.yaml files *are* the schema; anything else the user wrote is
+    # a typo that would otherwise fail silently. pid/hid are injected, not authored.
+    _warn_unknown_keys(user_cfg,
+                       set(base_cfg) | {"personas"},
+                       {**persona_default, "pid": None},
+                       {**harness_default, "hid": None})
 
     # 3. Layer every persona: shipped presets plus whatever the user declared.
     for pid in dict.fromkeys(preset_names("persona") + list(users_personas)):
@@ -408,10 +458,30 @@ def setup_harness(persona_id, harness_id, config):
       harness_id, harness_desc, config_dir, token_path, path_var, auth_var)
 
 
+def _rc_file():
+    """The shell rc file this user's login shell reads."""
+    shell = os.environ.get("SHELL", "/bin/bash")
+    return Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
+
+
+def _strip_wrapper(content, persona_id, harness_id, persona_desc=None, harness_desc=None):
+    """Remove an agent's wrapper block, matched by its markers.
+
+    Blocks are keyed on the stable ``<pid>-<hid>``; the description-keyed form
+    is matched too so blocks written before that change are still cleaned up.
+    """
+    markers = [re.escape(f"persona-grata: {persona_id}-{harness_id}")]
+    if persona_desc and harness_desc:
+        markers.append(rf"{re.escape(persona_desc)} & {re.escape(harness_desc)}")
+    for marker in markers:
+        content = re.sub(rf"# >>> {marker} >>>.*?# <<< {marker} <<<", "",
+                         content, flags=re.DOTALL)
+    return content
+
+
 def _install_shell_wrapper(persona_id, persona_desc,
       harness_id, harness_desc, config_dir, token_path, path_var, auth_var):
-    shell = os.environ.get("SHELL", "/bin/bash")
-    rc_file = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
+    rc_file = _rc_file()
     cmd_name = f"{persona_id}-{harness_id}"
 
     # Only emit assignments the harness actually uses; an empty name would
@@ -432,13 +502,8 @@ def _install_shell_wrapper(persona_id, persona_desc,
 """
 
     content = rc_file.read_text() if rc_file.exists() else ""
-    # Strip any previous block for this agent: the current id-keyed marker, and
-    # the legacy description-keyed one so renamed descriptions don't orphan it.
-    for marker in (re.escape(f"persona-grata: {cmd_name}"),
-                   rf"{re.escape(persona_desc)} & {re.escape(harness_desc)}"):
-        content = re.sub(rf"# >>> {marker} >>>.*?# <<< {marker} <<<", "",
-                         content, flags=re.DOTALL)
-    content = content.strip()
+    content = _strip_wrapper(content, persona_id, harness_id,
+                             persona_desc, harness_desc).strip()
     rc_file.write_text((content + "\n" if content else "") + wrapper)
 
     print("Setup complete.\n")
@@ -452,6 +517,74 @@ def _install_shell_wrapper(persona_id, persona_desc,
 
 
 # --------------------------------------------------------------------------- #
+# Removal
+# --------------------------------------------------------------------------- #
+def _too_dangerous_to_remove(target):
+    """Refuse to delete a root, a home, or anything containing one.
+
+    Directories come from resolved config, so a broken template must not be able
+    to aim ``rmtree`` at something catastrophic.
+    """
+    resolved = target.resolve()
+    home = Path.home().resolve()
+    return (resolved == Path(resolved.anchor)
+            or resolved == home
+            or resolved in home.parents)
+
+
+def _remove_tree(target, label):
+    """Delete a configured directory, or explain why it was left alone."""
+    if not target.is_dir():
+        print(f" - No {label} at {target}; nothing to remove.")
+        return False
+    if _too_dangerous_to_remove(target):
+        print(f"Error: refusing to remove {target} — that is a home or root directory.",
+              file=sys.stderr)
+        return False
+    shutil.rmtree(target)
+    print(f" - Removed {label} {target}.")
+    return True
+
+
+def remove_harness(persona_id, harness_id, config):
+    """Undo :func:`setup_harness`: drop the shell wrapper and the config dir.
+
+    The persona directory (which holds the API token) is deliberately left in
+    place; :func:`main` offers it separately once every harness is gone.
+    """
+    personas = _require(config, "personas", "section")
+    persona = _require(personas, persona_id, "persona")
+    harnesses = _require(persona, "harnesses", "section")
+    harness = _require(harnesses, harness_id, "harness")
+
+    persona_desc = persona.get("persona_desc") or persona_id
+    harness_desc = harness.get("harness_desc") or harness_id
+
+    print(f"\nRemoving {persona_desc} & {harness_desc} ({persona_id}-{harness_id})")
+
+    rc_file = _rc_file()
+    if rc_file.exists():
+        before = rc_file.read_text()
+        after = _strip_wrapper(before, persona_id, harness_id, persona_desc, harness_desc)
+        if after != before:
+            rc_file.write_text(after.strip() + "\n")
+            print(f" - Removed the shell wrapper from {rc_file}.")
+        else:
+            print(f" - No shell wrapper found in {rc_file}.")
+
+    if harness.get("path"):
+        _remove_tree(_path(harness["path"]), "config directory")
+
+
+def remove_persona_store(persona_id, config):
+    """Delete a persona's directory, including its API token."""
+    persona = (config.get("personas") or {}).get(persona_id) or {}
+    if not persona.get("path"):
+        return False
+    return _remove_tree(_path(persona["path"]), "persona directory (including token)")
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def _looks_like_config(arg):
@@ -461,9 +594,15 @@ def _looks_like_config(arg):
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    if args and args[0] in ("-h", "--help"):
+    if any(a in ("-h", "--help") for a in args):
         print(USAGE)
         return 0
+
+    removing = any(a in ("-r", "--remove") for a in args)
+    args = [a for a in args if a not in ("-r", "--remove")]
+    for arg in args:
+        if arg.startswith("-"):
+            sys.exit(f"Error: unknown option '{arg}'.\n\n{USAGE}")
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
@@ -485,11 +624,18 @@ def main(argv=None):
 
     for pid in targets:
         available = list((personas.get(pid) or {}).get("harnesses") or {})
-        for hid in chosen_harnesses or available:
+        selected = chosen_harnesses or available
+        for hid in selected:
             if hid not in available:
                 sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
                          f"Available: {', '.join(available) or 'none'}")
-            setup_harness(pid, hid, config)
+            (remove_harness if removing else setup_harness)(pid, hid, config)
+
+        # Once nothing is left wired up, the token is the only thing still on
+        # disk -- ask, since deleting it means pasting the key again.
+        if removing and set(selected) >= set(available):
+            if _confirm(f"Also remove {pid}'s stored API token?"):
+                remove_persona_store(pid, config)
     return 0
 
 

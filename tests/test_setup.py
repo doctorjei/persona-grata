@@ -160,3 +160,82 @@ def test_missing_endpoint_is_fatal(home):
     cfg = config(home, "personas:\n  bare_p:\n    mind:\n      model: 'm'\n")
     with pytest.raises(SystemExit):
         pg.setup_harness("bare_p", "claude", cfg)
+
+
+# --------------------------------------------------------------------------- #
+# Removal
+# --------------------------------------------------------------------------- #
+def test_remove_harness_takes_only_its_own(home):
+    (home / ".bashrc").write_text("export KEEPME=1\n")
+    cfg = config(home, BASIC)
+    pg.setup_harness("orion", "claude", cfg)
+    pg.setup_harness("orion", "codex", cfg)
+
+    pg.remove_harness("orion", "codex", cfg)
+
+    store = home / ".config" / "personas" / "orion"
+    assert not (store / "codex").exists()
+    assert (store / "claude" / "settings.json").exists()   # sibling untouched
+    assert (store / "token").exists()                      # token is kept
+    rc = (home / ".bashrc").read_text()
+    assert "orion-codex() {" not in rc
+    assert "orion-claude() {" in rc
+    assert "export KEEPME=1" in rc
+
+
+def test_remove_harness_is_idempotent(home):
+    cfg = config(home, BASIC)
+    pg.setup_harness("orion", "claude", cfg)
+    pg.remove_harness("orion", "claude", cfg)
+    pg.remove_harness("orion", "claude", cfg)          # must not raise
+    assert not (home / ".config" / "personas" / "orion" / "claude").exists()
+
+
+def test_remove_persona_store_deletes_the_token(home):
+    cfg = config(home, BASIC)
+    pg.setup_harness("orion", "claude", cfg)
+    store = home / ".config" / "personas" / "orion"
+    assert (store / "token").exists()
+
+    pg.remove_persona_store("orion", cfg)
+    assert not store.exists()
+
+
+@pytest.mark.parametrize("target", ["home", "root"])
+def test_removal_refuses_home_and_root(home, target, capsys):
+    path = str(home) if target == "home" else "/"
+    cfg = config(home, f"""
+personas:
+  bad:
+    path: "{path}"
+    mind:
+      endpoint: "https://x.invalid"
+    harnesses:
+      claude:
+        path: "{path}"
+""")
+    pg.remove_harness("bad", "claude", cfg)
+    assert "refusing to remove" in capsys.readouterr().err
+    assert home.is_dir()
+
+
+def test_cli_remove_offers_the_token_only_when_all_harnesses_go(home, monkeypatch):
+    prompts = []
+    monkeypatch.setattr(pg, "_confirm", lambda q, default=False: prompts.append(q) or False)
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+
+    def token_offers():
+        return [q for q in prompts if "stored API token" in q]
+
+    pg.main([str(path), "orion"])                       # install both
+    pg.main(["--remove", str(path), "orion", "codex"])  # partial -> no offer
+    assert token_offers() == []
+
+    pg.main(["-r", str(path), "orion"])                 # the rest -> offer
+    assert len(token_offers()) == 1
+
+
+def test_unknown_option_is_rejected(home):
+    with pytest.raises(SystemExit):
+        pg.main(["--bogus", "kimi"])

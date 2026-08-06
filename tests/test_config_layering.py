@@ -152,6 +152,65 @@ def test_declared_personas(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Unknown-key warnings
+# --------------------------------------------------------------------------- #
+def test_misspelled_keys_are_reported_at_every_level(tmp_path, capsys):
+    pg.load_config(write(tmp_path, """
+        persona_stor: "/tmp/typo"
+        personas:
+          orion:
+            persona_dsc: "typo"
+            mind:
+              endpoint: "https://x.test"
+              modell: "typo"
+            harnesses:
+              claude:
+                base_url: "typo"
+                verify:
+                  urll: "typo"
+    """))
+    err = capsys.readouterr().err
+    for expected in ("persona_stor",
+                     "personas.orion.persona_dsc",
+                     "personas.orion.mind.modell",
+                     "personas.orion.harnesses.claude.base_url",
+                     "personas.orion.harnesses.claude.verify.urll"):
+        assert expected in err
+
+
+def test_config_store_is_free_form_and_not_validated(tmp_path, capsys):
+    pg.load_config(write(tmp_path, """
+        personas:
+          orion:
+            mind: {endpoint: "https://x.test"}
+            harnesses:
+              claude:
+                config_store:
+                  whatever_the_harness_wants:
+                    deeply: {nested: "value"}
+    """))
+    assert "unknown setting" not in capsys.readouterr().err
+
+
+def test_valid_config_warns_about_nothing(tmp_path, capsys):
+    pg.load_config(write(tmp_path, """
+        persona_store: "/tmp/store"
+        personas:
+          orion:
+            persona_desc: "Orion"
+            token: "/tmp/store/orion/tok"
+            mind: {endpoint: "https://x.test", model: "m", model_1: "m1"}
+            harnesses:
+              claude:
+                harness_desc: "CC"
+                auth_var: "K"
+                base_uri: "https://x.test/anthropic"
+                verify: {url: "https://x.test/v", key_header: "x-api-key:", body: "{}"}
+    """))
+    assert "unknown setting" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
 # Rendered harness config files
 # --------------------------------------------------------------------------- #
 def test_claude_content_is_valid_json_with_unset_models_pruned(tmp_path):

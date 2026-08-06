@@ -105,6 +105,21 @@ Or, to install all agents and harnesses, run without persona and/or harness name
 
 _Setup every persona in the file with all known harnesses._
 
+`pg` is a shorter alias for the same command: `pg kimi claude`.
+
+### Remove an Agent
+
+Pass `--remove` (or `-r`) to undo a setup — the shell wrapper and the harness's
+config directory are removed:
+
+`pg --remove kimi codex`
+
+_Removes the Codex CLI agent for kimi, leaving Claude Code and the stored token alone._
+
+`pg --remove kimi`
+
+_Removes every kimi harness, then asks whether to delete the stored API token._
+
 ### Interaction
 
 The script automatically adds a shell wrapper to your `.bashrc` or `.zshrc`. After running setup
