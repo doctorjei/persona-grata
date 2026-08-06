@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Editor
+*.swp
+
+# Local working material (notes, keys, archives) -- not project content
+local-only/

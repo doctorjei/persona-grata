@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "persona-grata"
+version = "0.0.1"
+description = "Bind AI personas to orchestration harnesses to produce embodied agents."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=5.1"]
+authors = [{ name = "Jeremiah Blanchard" }]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE.md"]
+keywords = ["llm", "agents", "claude-code", "codex", "scaffolding"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/doctorjei/persona-grata"
+Repository = "https://github.com/doctorjei/persona-grata"
+Issues = "https://github.com/doctorjei/persona-grata/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+persona-grata = "persona_grata:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+persona_grata = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
