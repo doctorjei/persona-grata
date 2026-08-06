@@ -162,6 +162,48 @@ def test_missing_endpoint_is_fatal(home):
         pg.setup_harness("bare_p", "claude", cfg)
 
 
+def test_wrapper_env_is_exported(home):
+    # Goose has no relocatable config dir, so it is configured entirely through
+    # the wrapper's environment.
+    pg.setup_harness("orion", "goose", config(home, BASIC))
+    rc = (home / ".bashrc").read_text()
+    assert 'GOOSE_PROVIDER="openai"' in rc
+    assert 'GOOSE_MODEL="alpha-3-on"' in rc
+    assert 'OPENAI_HOST="https://api.cybertron.space"' in rc
+    assert 'OPENAI_API_KEY="$(cat ' in rc
+    subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
+    # ...and nothing is written to disk for it.
+    assert not list((home / ".config" / "personas" / "orion" / "goose").glob("*"))
+
+
+def test_wrapper_env_skips_blank_values(home):
+    cfg = config(home, """
+personas:
+  orion:
+    mind:
+      endpoint: "https://api.cybertron.space"
+    harnesses:
+      goose:
+        wrapper_env:
+          GOOSE_PROVIDER: "openai"
+          GOOSE_MODEL: ""
+""")
+    pg.setup_harness("orion", "goose", cfg)
+    rc = (home / ".bashrc").read_text()
+    assert 'GOOSE_PROVIDER="openai"' in rc
+    assert "GOOSE_MODEL" not in rc
+    subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
+
+
+def test_config_argument_is_recognised_by_extension_only(home, monkeypatch):
+    # A stray file named like a persona must not be read as a config file.
+    monkeypatch.chdir(home)
+    (home / "kimi").write_text("not a config")
+    assert pg._looks_like_config("kimi") is False
+    assert pg._looks_like_config("agents.yaml") is True
+    assert pg._looks_like_config("a.yml") is True
+
+
 # --------------------------------------------------------------------------- #
 # Removal
 # --------------------------------------------------------------------------- #

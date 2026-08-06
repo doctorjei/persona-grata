@@ -29,6 +29,21 @@ def test_env_unmatched_is_empty(monkeypatch):
     assert te.substitute_env("a${MISSING}b") == "ab"
 
 
+def test_env_double_dollar_escapes(monkeypatch):
+    monkeypatch.setenv("REAL", "expanded")
+    assert te.substitute_env("$REAL") == "expanded"
+    assert te.substitute_env("$$REAL") == "$REAL"      # escape, not expansion
+    assert te.substitute_env("$$") == "$"
+    assert te.substitute_env("a$${B}c") == "a${B}c"
+
+
+def test_escaped_dollar_is_not_rescanned(monkeypatch):
+    # The "$" produced by the escape must not combine with following text into
+    # a fresh macro -- substitution is one pass (rule 1d/1f).
+    monkeypatch.setenv("B", "boom")
+    assert te.substitute_env("$$B") == "$B"
+
+
 def test_env_single_pass_no_rescan(monkeypatch):
     # A value that itself looks like a macro must NOT be re-expanded (rule 1d).
     monkeypatch.setenv("A", "$B")

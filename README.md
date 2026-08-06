@@ -66,7 +66,7 @@ for each endpoint, a default persona is derived:
 
 _Endpoint Personas_: kimi, minimax, navigator
 
-_Coding Harnesses_: claude, codex
+_Coding Harnesses_: claude, codex, goose
 
 ### Setup an Agent
 
@@ -144,7 +144,7 @@ Persona-Grata supports a dynamic variable resolution system via `{{variable}}` s
   subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
 
 Environment variables (`$FOO`, `${FOO}`) are also substituted, in a single pass, before the file
-is parsed.
+is parsed. Write `$$` for a literal dollar sign — `$$HOME` yields the text `$HOME`.
 
 For more about templates & configuration, see the [Config Reference Manual](CONFIG_REFERENCE.md).
 

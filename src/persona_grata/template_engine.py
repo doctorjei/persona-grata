@@ -20,7 +20,7 @@ import re
 import copy
 import json
 
-_ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+_ENV_RE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 _TMPL_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 _CALL_RE = re.compile(r"^(__[A-Za-z0-9_]+__)\(\)$")
 
@@ -43,13 +43,16 @@ def substitute_env(text, defaults=None):
 
     Value precedence: real environment -> ``defaults`` mapping -> empty string
     (rule 1e, generalized so callers can supply defaults for chosen vars).
-    Substituted content is not re-scanned (rule 1d).
+    Substituted content is not re-scanned (rule 1d), so ``$$`` -> ``$`` is the
+    escape for a literal dollar: ``$$FOO`` yields the text ``$FOO``.
     """
     if not isinstance(text, str):
         return text
     defaults = defaults or {}
 
     def repl(m):
+        if m.group(0) == "$$":
+            return "$"
         name = m.group(1) or m.group(2)
         if name in os.environ:
             return os.environ[name]

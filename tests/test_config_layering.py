@@ -36,7 +36,7 @@ def test_minimal_user_config_gets_every_default(tmp_path):
     assert persona["persona_desc"] == "test_user"           # persona default template
     assert persona["path"] == "/xdg/personas/test_user"
     assert persona["token"] == "/xdg/personas/test_user/token"
-    assert set(persona["harnesses"]) == {"claude", "codex"}  # automatic expansion
+    assert set(persona["harnesses"]) == set(pg.preset_names("harness"))  # automatic expansion
     assert persona["harnesses"]["claude"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
     assert persona["harnesses"]["claude"]["path"] == "/xdg/personas/test_user/claude"
 

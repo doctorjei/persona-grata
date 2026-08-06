@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "persona-grata"
-version = "0.0.1"
+version = "0.0.2"
 description = "Bind AI personas to orchestration harnesses to produce embodied agents."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,6 +16,7 @@ keywords = ["llm", "agents", "claude-code", "codex", "scaffolding"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
+    "Operating System :: POSIX",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Code Generators",

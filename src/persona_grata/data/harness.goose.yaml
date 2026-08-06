@@ -1,0 +1,16 @@
+##################################################################################################
+# Goose Harness Settings
+#
+# Goose has no environment variable that relocates its config directory (it reads
+# ~/.config/goose/config.yaml), so a per-persona config file cannot be isolated the way it can
+# for Claude Code and the Codex CLI. Everything is passed through the wrapper's environment
+# instead, which takes precedence over the config file. `config_file` is therefore left unset
+# and nothing is written to disk.
+
+goose:
+  harness_desc: "Goose"
+  auth_var: "OPENAI_API_KEY"
+  wrapper_env:
+    GOOSE_PROVIDER: "openai"                     # Built-in provider used for OpenAI-compatible APIs
+    GOOSE_MODEL: "{{mind.model}}"
+    OPENAI_HOST: "{{base_uri}}"                  # Base URI; OPENAI_BASE_PATH supplies /v1/...

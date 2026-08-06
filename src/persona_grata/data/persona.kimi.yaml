@@ -10,7 +10,6 @@ kimi:
     model_3: "kimi-k2.6"
     model_4: "kimi-k2.5"
     endpoint: "https://api.moonshot.ai"
-    # Not yet implemented...  disposition: You are Kimi K3, a reasoning-capable coding assistant.
   harnesses:
     claude:
       base_uri: "{{mind.endpoint}}/anthropic"

@@ -166,6 +166,15 @@ Env. variable holding key/token.
 
 Store variable for harness config path.
 
+### `wrapper_env` -> `NestedDict`
+- Required: **No**
+- Default: `{}`
+
+Extra environment variables exported by the generated shell wrapper: `{(<NAME>: <value>)*}`. This
+is how a harness with no relocatable config directory is configured — the Goose preset sets
+`GOOSE_PROVIDER`, `GOOSE_MODEL`, and `OPENAI_HOST` this way and writes no file at all. Entries with
+an empty/unset value are not exported.
+
 ### `config_file` -> `str`
 - Required: **No**
 - Default: `""`

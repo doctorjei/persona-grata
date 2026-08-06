@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 from . import template_engine as te
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 # Default values for selected environment variables (rule 1e is "empty string";
 # these are the caller-supplied defaults the engine falls back to when a var is
@@ -418,6 +418,7 @@ def setup_harness(persona_id, harness_id, config):
     content = harness.get("content")
     path_var = harness.get("path_var") or ""
     auth_var = harness.get("auth_var") or ""
+    wrapper_env = harness.get("wrapper_env") or {}
     verify = harness.get("verify")
 
     print("\n===========================================================================")
@@ -454,8 +455,8 @@ def setup_harness(persona_id, harness_id, config):
         print(f" - No config file for {harness_desc}; skipping.")
 
     # 5. Shell wrapper
-    _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, path_var, auth_var)
+    _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
+      config_dir, token_path, path_var, auth_var, wrapper_env)
 
 
 def _rc_file():
@@ -479,8 +480,8 @@ def _strip_wrapper(content, persona_id, harness_id, persona_desc=None, harness_d
     return content
 
 
-def _install_shell_wrapper(persona_id, persona_desc,
-      harness_id, harness_desc, config_dir, token_path, path_var, auth_var):
+def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
+      config_dir, token_path, path_var, auth_var, wrapper_env=None):
     rc_file = _rc_file()
     cmd_name = f"{persona_id}-{harness_id}"
 
@@ -491,6 +492,10 @@ def _install_shell_wrapper(persona_id, persona_desc,
         assignments.append(f'{path_var}="{config_dir}"')
     if auth_var and token_path is not None:
         assignments.append(f'{auth_var}="$(cat {token_path})"')
+    # Harnesses with no relocatable config file are configured entirely here.
+    for name, value in (wrapper_env or {}).items():
+        if name and value not in (None, ""):
+            assignments.append(f'{name}="{value}"')
     env_lines = "".join(f"  {a} \\\n" for a in assignments)
 
     wrapper = f"""
@@ -588,8 +593,13 @@ def remove_persona_store(persona_id, config):
 # CLI
 # --------------------------------------------------------------------------- #
 def _looks_like_config(arg):
-    """A leading argument is the config file if it names one (or looks like it)."""
-    return arg.endswith((".yaml", ".yml")) or Path(arg).is_file()
+    """A leading argument is the config file when it is named like one.
+
+    Keyed on the extension rather than on the file existing, so that a stray
+    file in the working directory cannot turn ``pg kimi`` into a request to
+    load a config named "kimi".
+    """
+    return arg.endswith((".yaml", ".yml"))
 
 
 def main(argv=None):
