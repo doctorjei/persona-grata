@@ -347,6 +347,33 @@ def test_unknown_serializer_raises():
         _resolve('a:\n  b: "x"\nc: "{{a.__AS_YAML__()}}"\n')
 
 
+ROUND_TRIP_CASES = {
+    "quotes": {"s": 'he said "hi"'},
+    "backslash": {"s": r"C:\path\to"},
+    "both": {"s": 'a"b\\c'},
+    "types": {"i": 3, "f": 1.5, "yes": True, "no": False, "list": ["x", "y"]},
+    "dotted key": {"model_providers.codex": {"name": "n"}},
+    "spaced key": {"odd key": "v"},
+    "deep nest": {"a": {"b": {"c": {"x": 1}}}},
+    "empty pruned": {"keep": "v", "drop": "", "gone": None, "hollow": {}},
+    "unicode": {"s": "café — ✓"},
+}
+
+
+@pytest.mark.parametrize("data", ROUND_TRIP_CASES.values(), ids=list(ROUND_TRIP_CASES))
+def test_to_toml_round_trips_through_a_real_parser(data):
+    # Asserting on substrings only proves the text looks right; parsing it back
+    # proves the escaping and table nesting are actually valid TOML.
+    tomllib = pytest.importorskip("tomllib")     # stdlib from 3.11
+    assert tomllib.loads(te.to_toml(data)) == te.prune(data)
+
+
+@pytest.mark.parametrize("data", ROUND_TRIP_CASES.values(), ids=list(ROUND_TRIP_CASES))
+def test_to_json_round_trips(data):
+    import json
+    assert json.loads(te.to_json(data)) == te.prune(data)
+
+
 def test_serializer_defers_until_subtree_is_resolved():
     # 'content' is serialized only after every {{}} inside the subtree is gone,
     # regardless of declaration order.

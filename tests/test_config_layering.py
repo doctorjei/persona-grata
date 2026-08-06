@@ -170,6 +170,26 @@ def test_claude_content_is_valid_json_with_unset_models_pruned(tmp_path):
     assert "" not in settings["env"].values()
 
 
+def test_every_shipped_harness_renders_a_parseable_config_file():
+    tomllib = pytest.importorskip("tomllib")
+    cfg = pg.load_config()
+    for pid, persona in cfg["personas"].items():
+        for hid, harness in persona["harnesses"].items():
+            content, config_file = harness["content"], harness["config_file"]
+            if not (content and config_file):
+                continue
+            parse = tomllib.loads if config_file.endswith(".toml") else json.loads
+            parse(content)          # raises -> the preset ships a broken config
+
+
+def test_codex_toml_provider_table_matches_model_provider():
+    tomllib = pytest.importorskip("tomllib")
+    cfg = pg.load_config()
+    codex = tomllib.loads(cfg["personas"]["kimi"]["harnesses"]["codex"]["content"])
+    assert codex["model_provider"] in codex["model_providers"]
+    assert codex["model_providers"][codex["model_provider"]]["wire_api"] == "responses"
+
+
 def test_codex_content_is_toml_naming_the_harness(tmp_path):
     cfg = pg.load_config(write(tmp_path, """
         personas:
