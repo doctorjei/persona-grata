@@ -8,11 +8,13 @@ codex:
   config_file: "{{path}}/config.toml"
   config_store:
     model: "{{mind.model}}"
-    model_provider: "{{harnesses.__PARENT__.__KEY__}}"
+    model_provider: "{{hid}}"
 
-　　"model_providers\.{{harnesses.__PARENT__.__KEY__}}":
-      name: "{{persona_desc}}"
-      base_url: "{{mind.endpoint}}"
-      wire_api: "responses"
-      env_key: "{{auth_var}}"
+    # Nested maps become TOML tables, so this renders as [model_providers.codex].
+    model_providers:
+      "{{hid}}":
+        name: "{{persona_desc}}"
+        base_url: "{{base_uri}}"
+        wire_api: "responses"
+        env_key: "{{auth_var}}"
   content: "{{config_store.__AS_TOML__()}}"

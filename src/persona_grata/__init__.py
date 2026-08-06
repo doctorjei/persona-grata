@@ -1,14 +1,15 @@
 """Persona setup workflow: resolve agents.yaml, then wire up a harness.
 
 All template resolution is delegated to :mod:`template_engine`; this module only
-consumes the resolved values to obtain/verify the API token, create directories,
-render the harness config file, and install a shell wrapper.
+assembles the layered configuration and consumes the resolved values to obtain
+and verify the API token, create directories, render the harness config file,
+and install a shell wrapper.
 """
 
 import os
 import re
 import sys
-import json
+import copy
 import getpass
 import urllib.request
 import urllib.error
@@ -16,6 +17,8 @@ from pathlib import Path
 
 import yaml
 from . import template_engine as te
+
+__version__ = "0.0.1"
 
 # Default values for selected environment variables (rule 1e is "empty string";
 # these are the caller-supplied defaults the engine falls back to when a var is
@@ -32,6 +35,22 @@ VERIFY_TIMEOUT = 10
 DEFAULT_VERIFY_HEADERS = ["content-type: application/json"]
 DEFAULT_BODY = """{"model": "%s", "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]}"""
 
+DATA_DIR = Path(__file__).parent / "data"
+
+# The schema files use `None` to mean "unset" -- readable in a comment-heavy
+# reference file, but YAML 1.1 has no such token, so PyYAML hands it back as a
+# plain string. Normalize it (and its YAML-ish spellings) on load.
+_UNSET_TOKENS = {"none", "null"}
+
+USAGE = """\
+Usage:
+  persona-grata <persona> [harness ...]
+  persona-grata <agents.yaml> [persona] [harness ...]
+
+Omit the harness names to set up every harness known to that persona; omit the
+persona too to set up every persona in the configuration."""
+
+
 def deep_merge(source, destination):
     """Recursively merge source into destination."""
     for key, value in source.items():
@@ -45,114 +64,186 @@ def deep_merge(source, destination):
             destination[key] = value
     return destination
 
+
+def _normalize_unset(value):
+    """Rewrite the schema's ``None`` placeholder to a real ``None``."""
+    if isinstance(value, dict):
+        return {k: _normalize_unset(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_unset(v) for v in value]
+    if isinstance(value, str) and value.strip().lower() in _UNSET_TOKENS:
+        return None
+    return value
+
+
+def _ensure_dict(mapping, key):
+    """``setdefault``, but an unset placeholder is replaced by a fresh dict."""
+    value = mapping.get(key)
+    if not isinstance(value, dict):
+        value = {}
+        mapping[key] = value
+    return value
+
+
 def load_yaml(path, env_defaults=None):
-    """Read text -> substitute env vars -> parse YAML."""
+    """Read text -> substitute env vars -> parse YAML -> normalize placeholders."""
     if not Path(path).exists():
         return None
     raw = Path(path).read_text()
     substituted = te.substitute_env(raw, env_defaults)
-    return yaml.safe_load(substituted)
+    return _normalize_unset(yaml.safe_load(substituted))
 
-def load_config(path="agents.yaml", env_defaults=None):
+
+def preset_names(kind):
+    """Sorted ids of the ``<kind>.<id>.yaml`` presets shipped in ``data/``."""
+    return sorted(f.stem.split(".", 1)[1] for f in DATA_DIR.glob(f"{kind}.*.yaml")
+                  if f.stem != f"{kind}.default")
+
+
+def _load_preset(kind, name, env_defaults, schema_keys):
+    """Load ``data/<kind>.<name>.yaml``, unwrapping its self-named outer block.
+
+    Presets wrap their body in their own id so that a block can be pasted
+    straight into an ``agents.yaml``; the layering merges the *body*, so the
+    wrapper is stripped here. A wrapper that disagrees with the filename is an
+    authoring mistake and is reported rather than silently merged as a stray key.
     """
-    Assembles the final configuration tree using a layered approach:
-    Global Default -> Persona Default -> Persona Preset -> 
-    Harness Default -> Harness Preset -> User Overrides.
+    data = load_yaml(DATA_DIR / f"{kind}.{name}.yaml", env_defaults)
+    if not isinstance(data, dict):
+        return {}
+    if len(data) == 1:
+        (key, body), = data.items()
+        if key not in schema_keys:
+            if key != name:
+                sys.exit(f"Error: {kind} preset '{name}.yaml' wraps its settings in "
+                         f"'{key}:', which does not match its id '{name}'.")
+            return body if isinstance(body, dict) else {}
+    return data
+
+
+def _normalize_personas(user_cfg):
+    """Accept the ``personas`` shorthands (a name, or a list of names)."""
+    personas = user_cfg.get("personas")
+    if isinstance(personas, str):
+        user_cfg["personas"] = {personas: {}}
+    elif isinstance(personas, list):
+        user_cfg["personas"] = {name: {} for name in personas}
+    elif not isinstance(personas, dict):
+        user_cfg["personas"] = {}
+    return user_cfg
+
+
+def declared_personas(path, env_defaults=None):
+    """Persona names the user's file asks for, in order (empty when there is none)."""
+    if path is None:
+        return []
+    user_cfg = load_yaml(path, env_defaults if env_defaults is not None else ENV_DEFAULTS)
+    if not isinstance(user_cfg, dict):
+        return []
+    return list(_normalize_personas(user_cfg)["personas"])
+
+
+def _drop_disabled(config):
+    """Remove personas/harnesses the configuration switched off with ``None``."""
+    personas = _ensure_dict(config, "personas")
+    for pid, persona in list(personas.items()):
+        if not isinstance(persona, dict):
+            del personas[pid]
+            continue
+        harnesses = _ensure_dict(persona, "harnesses")
+        for hid, harness in list(harnesses.items()):
+            if not isinstance(harness, dict):
+                del harnesses[hid]
+    return config
+
+
+def load_config(path=None, env_defaults=None):
+    """Assemble and resolve the full configuration tree.
+
+    Layered bottom-up, each stage overriding the last -- most specific wins::
+
+        persona:  Global Default -> Persona Default -> Persona Preset -> User
+        harness:  Harness Default -> Harness Preset
+                                  -> Persona Preset's harnesses.<hid> -> User
+
+    Every persona -- the user's and the shipped presets alike -- is built, so
+    that absolute references such as ``{{personas.orion.mind.model}}`` resolve
+    from anywhere. Choosing *which* personas to actually set up is the caller's
+    job (see :func:`declared_personas`).
     """
     if env_defaults is None:
         env_defaults = ENV_DEFAULTS
 
-    data_dir = Path(__file__).parent / "data"
-    
-    # 1. Load User Config (the authority for active personas)
-    user_cfg = load_yaml(path, env_defaults)
-    if user_cfg is None:
-        print(f"Error: Configuration file {path} not found.")
-        sys.exit(1)
+    # 1. User config -- optional; the shipped presets alone are a usable config.
+    user_cfg = {}
+    if path is not None:
+        user_cfg = load_yaml(path, env_defaults)
+        if user_cfg is None:
+            sys.exit(f"Error: Configuration file {path} not found.")
+        if not isinstance(user_cfg, dict):
+            sys.exit(f"Error: Configuration file {path} is not a mapping.")
+    user_cfg = _normalize_personas(user_cfg)
+    users_personas = user_cfg["personas"]
 
-    # Normalize user_cfg: ensure 'personas' is a dict for merging
-    # User may have provided personas as a list of names or a single string
-    personas_input = user_cfg.get("personas")
-    if personas_input is not None:
-        if isinstance(personas_input, list):
-            user_cfg["personas"] = {pid: {} for pid in personas_input}
-        elif isinstance(personas_input, str):
-            user_cfg["personas"] = {personas_input: {}}
-        elif not isinstance(personas_input, dict):
-            # Unexpected type, but we must ensure it's a dict for deep_merge
-            user_cfg["personas"] = {}
+    # 2. Global defaults.
+    base_cfg = load_yaml(DATA_DIR / "agents.default.yaml", env_defaults) or {}
+    base_personas = _ensure_dict(base_cfg, "personas")
 
-    # 2. Start with Global Defaults
-    base_cfg = load_yaml(data_dir / "agents.default.yaml", env_defaults) or {}
+    persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
+    harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
+    known_harnesses = preset_names("harness")
 
-    # 3. Layer Personas
-    personas_user = user_cfg.get("personas", {})
-    persona_names = list(personas_user.keys())
+    # 3. Layer every persona: shipped presets plus whatever the user declared.
+    for pid in dict.fromkeys(preset_names("persona") + list(users_personas)):
+        preset = _load_preset("persona", pid, env_defaults, persona_default)
+        # A persona preset may also carry per-harness overrides; those are more
+        # specific than the harness presets, so they are layered separately below
+        # rather than merged in with the rest of the persona.
+        preset_harnesses = preset.pop("harnesses", None) or {}
 
-    # Ensure we have a personas dict in base_cfg
-    base_cfg.setdefault("personas", {})
-    
-    # Identify all known persona presets in data/
-    known_persona_presets = [f.stem.replace("persona.", "") 
-                             for f in data_dir.glob("persona.*.yaml") 
-                             if f.stem != "persona.default"]
+        persona_layer = copy.deepcopy(persona_default)
+        deep_merge(preset, persona_layer)
+        persona_layer.pop("harnesses", None)
+        persona_layer["pid"] = pid
+        persona = deep_merge(persona_layer, _ensure_dict(base_personas, pid))
 
-    # Use set of personas = (User's identified personas) + (Known presets if user's list is empty/None)
-    active_personas = set(persona_names)
-    if not active_personas:
-        active_personas.update(known_persona_presets)
+        # Harness expansion: every known harness, plus any this persona adds.
+        declared = users_personas.get(pid)
+        declared = declared.get("harnesses") if isinstance(declared, dict) else None
+        harness_ids = dict.fromkeys(
+            known_harnesses + list(preset_harnesses) + list(declared or {}))
 
-    for pid in active_personas:
-        # Layer: Persona Default
-        p_default = load_yaml(data_dir / "persona.default.yaml", env_defaults) or {}
-        # Layer: Persona Preset
-        p_preset = load_yaml(data_dir / f"persona.{pid}.yaml", env_defaults) or {}
-        
-        persona_base = {}
-        deep_merge(p_default, persona_base)
-        deep_merge(p_preset, persona_base)
-        
-        # Ensure the pid is set in the base
-        persona_base["pid"] = pid
-        
-        # Layer into base_cfg
-        deep_merge(persona_base, base_cfg["personas"].setdefault(pid, {}))
+        harness_map = _ensure_dict(persona, "harnesses")
+        for hid in harness_ids:
+            if hid in preset_harnesses and preset_harnesses[hid] is None:
+                continue                              # preset switched it off
+            harness_layer = copy.deepcopy(harness_default)
+            deep_merge(_load_preset("harness", hid, env_defaults, harness_default), harness_layer)
+            if isinstance(preset_harnesses.get(hid), dict):
+                deep_merge(preset_harnesses[hid], harness_layer)
+            harness_layer["hid"] = hid
+            deep_merge(harness_layer, _ensure_dict(harness_map, hid))
 
-        # --- Harness Expansion ---
-        # Find all known harness presets in data/
-        known_harness_presets = [f.stem.replace("harness.", "") 
-                                 for f in data_dir.glob("harness.*.yaml") 
-                                 if f.stem != "harness.default"]
-        
-        harness_map = base_cfg["personas"][pid].setdefault("harnesses", {})
-        
-        # All harnesses are included by default
-        for hid in known_harness_presets:
-            # Layer: Harness Default
-            h_default = load_yaml(data_dir / "harness.default.yaml", env_defaults) or {}
-            # Layer: Harness Preset
-            h_preset = load_yaml(data_dir / f"harness.{hid}.yaml", env_defaults) or {}
-            
-            harness_base = {}
-            deep_merge(h_default, harness_base)
-            deep_merge(h_preset, harness_base)
-            
-            # Layer into the persona's harness map
-            deep_merge(harness_base, harness_map.setdefault(hid, {}))
-
-    # 4. Final User Overlay
-    # We deep merge the normalized user_cfg on top of the constructed base
+    # 4. User overrides go on last, so they beat every default and preset.
     deep_merge(user_cfg, base_cfg)
 
-    # 5. Template Resolution
+    # 5. Drop anything switched off before resolving -- a disabled harness need
+    #    not hold resolvable templates.
+    _drop_disabled(base_cfg)
+
+    # 6. Template resolution.
     return te.resolve_tree(base_cfg)
 
 
 def _require(mapping, key, kind):
     if not isinstance(mapping, dict) or key not in mapping:
-        print(f"Error: {kind} '{key}' not found in config.")
-        sys.exit(1)
+        sys.exit(f"Error: {kind} '{key}' not found in config.")
     return mapping[key]
+
+
+def _path(value):
+    """A configured path as a real one -- ``~`` is the user's, not a directory."""
+    return Path(value).expanduser()
 
 
 # --------------------------------------------------------------------------- #
@@ -209,8 +300,8 @@ def _verify_key(verify, model, key):
         return
 
     url = verify["url"]
-    headers = DEFAULT_VERIFY_HEADERS + list(verify.get("headers", []))
-    body = verify.get("body") or DEFAULT_BODY % model
+    headers = DEFAULT_VERIFY_HEADERS + list(verify.get("headers") or [])
+    body = verify.get("body") or DEFAULT_BODY % (model or "")
     req = urllib.request.Request(url, data=body.encode(), method="POST")
 
     for line in headers:
@@ -240,10 +331,11 @@ def _verify_key(verify, model, key):
         print(f"error (HTTP {code}). Skipping key check.", file=sys.stderr)
 
 
-def _write_token(token_path, key):
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    with os.fdopen(os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
-        f.write(key)
+def _write_private(path, text):
+    """Write ``text`` to ``path`` with 0600 permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+        f.write(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -255,17 +347,27 @@ def setup_harness(persona_id, harness_id, config):
     harnesses = _require(persona, "harnesses", "section")
     harness = _require(harnesses, harness_id, "harness")
 
-    persona_desc = persona.get("persona_desc", persona_id)
-    model = persona.get("mind", {}).get("model", "")
-    home = Path(persona["path"])
-    token_path = Path(persona["mind"]["token_path"])
+    persona_desc = persona.get("persona_desc") or persona_id
+    endpoint = (persona.get("mind") or {}).get("endpoint")
+    if not endpoint:
+        sys.exit(f"Error: persona '{persona_id}' has no 'mind.endpoint' — it is required.")
+    model = (persona.get("mind") or {}).get("model") or ""
 
-    harness_desc = harness.get("harness_desc", "harness")
-    config_dir = Path(harness["path"])
-    config_file = Path(harness["config_file"])
-    path_var = harness.get("path_var", "")
-    auth_var = harness.get("auth_var", "")
-    content = harness["content"]
+    home = persona.get("path")
+    if not home:
+        sys.exit(f"Error: persona '{persona_id}' resolved an empty 'path'.")
+    home = _path(home)
+    token_path = _path(persona["token"]) if persona.get("token") else None
+
+    harness_desc = harness.get("harness_desc") or harness_id
+    config_dir = harness.get("path")
+    if not config_dir:
+        sys.exit(f"Error: harness '{harness_id}' resolved an empty 'path'.")
+    config_dir = _path(config_dir)
+    config_file = harness.get("config_file")
+    content = harness.get("content")
+    path_var = harness.get("path_var") or ""
+    auth_var = harness.get("auth_var") or ""
     verify = harness.get("verify")
 
     print("\n===========================================================================")
@@ -274,28 +376,37 @@ def setup_harness(persona_id, harness_id, config):
 
     # 1. Token: keep an existing one on request, else prompt + verify + write.
     #    Verification runs before anything is written, so a bad key writes nothing.
-    if token_path.exists() and not _confirm("Replace existing authorization token?"):
+    #    A persona with no token path talks to an endpoint that needs no key.
+    if token_path is None:
+        print(" - No token path configured; skipping key setup.")
+    elif token_path.exists() and not _confirm("Replace existing authorization token?"):
         print(f" - Keeping existing token at {token_path}.")
     else:
         key = _prompt_key(persona_desc)
         _verify_key(verify, model, key)
-        _write_token(token_path, key)
+        _write_private(token_path, key)
 
     # 2. Directories
     home.mkdir(parents=True, exist_ok=True)
     config_dir.mkdir(parents=True, exist_ok=True)
 
     # 3. Record the token location for downstream tooling (0600).
-    secret_path = home / ".secret_path"
-    with os.fdopen(os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
-        f.write(str(token_path) + "\n")
+    if token_path is not None:
+        _write_private(home / ".secret_path", str(token_path) + "\n")
 
     # 4. Render config file (content is already fully resolved by the engine).
-    config_file.write_text(content)
+    if config_file and content:
+        config_file = _path(config_file)
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(content)
+        print(f" - Wrote {config_file}.")
+    else:
+        print(f" - No config file for {harness_desc}; skipping.")
 
     # 5. Shell wrapper
     _install_shell_wrapper(persona_id, persona_desc,
       harness_id, harness_desc, config_dir, token_path, path_var, auth_var)
+
 
 def _install_shell_wrapper(persona_id, persona_desc,
       harness_id, harness_desc, config_dir, token_path, path_var, auth_var):
@@ -303,24 +414,32 @@ def _install_shell_wrapper(persona_id, persona_desc,
     rc_file = Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
     cmd_name = f"{persona_id}-{harness_id}"
 
+    # Only emit assignments the harness actually uses; an empty name would
+    # otherwise become a bare `="..."` word and break the function.
+    assignments = []
+    if path_var:
+        assignments.append(f'{path_var}="{config_dir}"')
+    if auth_var and token_path is not None:
+        assignments.append(f'{auth_var}="$(cat {token_path})"')
+    env_lines = "".join(f"  {a} \\\n" for a in assignments)
+
     wrapper = f"""
-# >>> {persona_desc} & {harness_desc} >>>
+# >>> persona-grata: {cmd_name} >>>
 {cmd_name}() {{
-  {path_var}="{config_dir}" \\
-  {auth_var}="$(cat {token_path})" \\
-  command {harness_id} "$@"
+{env_lines}  command {harness_id} "$@"
 }}
-# <<< {persona_desc} & {harness_desc} <<<
+# <<< persona-grata: {cmd_name} <<<
 """
 
     content = rc_file.read_text() if rc_file.exists() else ""
-    pattern = re.compile(
-        rf"# >>> {re.escape(persona_desc)} & {re.escape(harness_desc)} >>>.*?"
-        rf"# <<< {re.escape(persona_desc)} & {re.escape(harness_desc)} <<<",
-        re.DOTALL,
-    )
-    content = pattern.sub("", content).strip()
-    rc_file.write_text(content + "\n\n" + wrapper)
+    # Strip any previous block for this agent: the current id-keyed marker, and
+    # the legacy description-keyed one so renamed descriptions don't orphan it.
+    for marker in (re.escape(f"persona-grata: {cmd_name}"),
+                   rf"{re.escape(persona_desc)} & {re.escape(harness_desc)}"):
+        content = re.sub(rf"# >>> {marker} >>>.*?# <<< {marker} <<<", "",
+                         content, flags=re.DOTALL)
+    content = content.strip()
+    rc_file.write_text((content + "\n" if content else "") + wrapper)
 
     print("Setup complete.\n")
     print("Setup Notes")
@@ -329,11 +448,50 @@ def _install_shell_wrapper(persona_id, persona_desc,
     print(f"2. Running {harness_id} still uses its native models (settings unchanged).\n")
     print(f"To run {persona_desc} with {harness_desc}")
     print("----------------------------------------------------------------------------")
-    print(f"> {persona_id}-{harness_id}\n")
+    print(f"> {cmd_name}\n")
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+def _looks_like_config(arg):
+    """A leading argument is the config file if it names one (or looks like it)."""
+    return arg.endswith((".yaml", ".yml")) or Path(arg).is_file()
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in ("-h", "--help"):
+        print(USAGE)
+        return 0
+
+    config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
+    persona = args.pop(0) if args else None
+    chosen_harnesses = args
+
+    config = load_config(config_path)
+    personas = config.get("personas") or {}
+
+    if persona is not None:
+        if persona not in personas:
+            sys.exit(f"Error: unknown persona '{persona}'. "
+                     f"Available: {', '.join(sorted(personas)) or 'none'}")
+        targets = [persona]
+    else:
+        targets = declared_personas(config_path) or list(personas)
+
+    if not targets:
+        sys.exit("Error: no personas to set up.\n\n" + USAGE)
+
+    for pid in targets:
+        available = list((personas.get(pid) or {}).get("harnesses") or {})
+        for hid in chosen_harnesses or available:
+            if hid not in available:
+                sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
+                         f"Available: {', '.join(available) or 'none'}")
+            setup_harness(pid, hid, config)
+    return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print("Usage: python persona_grata.py <schema-yaml> <persona> <harness>")
-        sys.exit(1)
-    setup_harness(sys.argv[2], sys.argv[3], load_config(sys.argv[1]))
+    sys.exit(main())

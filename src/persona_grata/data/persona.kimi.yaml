@@ -4,8 +4,8 @@
 kimi:
   persona_desc: "Kimi"
   mind:
-    model: "kimi-k3"
-    model_1: "kimi-k2.7-code"
+    model: "kimi-k3[1m]"
+    model_1: "kimi-k2.7-code" # 262144 (256K)
     model_2: "kimi-k2.7-code-highspeed"
     model_3: "kimi-k2.6"
     model_4: "kimi-k2.5"
@@ -14,5 +14,7 @@ kimi:
   harnesses:
     claude:
       base_uri: "{{mind.endpoint}}/anthropic"
-
+      # config_store:
+      #   env:
+      #     CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
     # The codex CLI also works but uses completely default settings.

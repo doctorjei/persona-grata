@@ -10,12 +10,29 @@ claude:
     model: "{{mind.model}}"
     env:
       ANTHROPIC_BASE_URL: "{{base_uri}}"
-      ANTHROPIC_DEFAULT_OPUS_MODEL: "{{mind.model}}"
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "{{mind.model}}"
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{mind.model}}"
-  content: "{{config_store.__AS_JSON__()}}"  # should be { model: "foo", env: {{env_var: value}} }
+      ANTHROPIC_MODEL: "{{mind.model}}"
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "{{mind.model}}"
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "{{mind.model_1}}"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "{{mind.model_2}}"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "{{mind.model_3}}"
+      ANTHROPIC_CUSTOM_MODEL_OPTION: "{{mind.model_4}}"
+#      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
+#      ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION: "A great role-model. Ha!"
+#      ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "Billy-Bob"
+#      ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES
+#      CLAUDE_CODE_EFFORT_LEVEL: "max"
+      CLAUDE_CODE_SUBAGENT_MODEL: "{{mind.model}}"
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1"
+
+  content: "{{config_store.__AS_JSON__()}}"   # should be { model: "foo", env: {{env_var: value}} }
   verify:
     url: "{{base_uri}}/v1/messages"
     headers:
       - "anthropic-version: 2023-06-01"
 
+#CLAUDE_CODE_ATTRIBUTION_HEADER
+#CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING
+#CLAUDE_CODE_MAX_CONTEXT_TOKENS
+#CLAUDE_CODE_MAX_OUTPUT_TOKENS
+#CLAUDE_CODE_TMUX_TRUECOLOR
+#CLAUDE_EFFORT

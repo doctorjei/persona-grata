@@ -1,19 +1,21 @@
 ##################################################################################################
-# Kimi K3 Persona Settings
+# Minimax Persona Settings
 
-kimi_k3:
+minimax:
   persona_desc: "Minimax"
   mind:
     model: "MiniMax-M3"
     model_1: "MiniMax-M2.7"
-    model_3: "MiniMax-M2.7-highspeed"
-    model_2: "MiniMax-M2.5"
-    model_3: "MiniMax-M2.5-highspeed"
+    model_2: "MiniMax-M2.7-highspeed"
+    model_3: "MiniMax-M2.5"
+    model_4: "MiniMax-M2.5-highspeed"
+    endpoint: "https://api.minimax.io"
 
-    endpoint: "https://api.moonshot.ai"
-    # Not yet implemented...  disposition: You are Kimi K3, a reasoning-capable coding assistant.
   harnesses:
     claude:
       base_uri: "{{mind.endpoint}}/anthropic"
+      config_store:
+        env:
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
 
     # The codex CLI also works but uses completely default settings.
