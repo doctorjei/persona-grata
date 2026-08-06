@@ -1,11 +1,11 @@
 # Persona-Grata: Custom Agent Guide
 
-> Persona-Grata allows the configuration of _minds_ (congnitive entity) from settings & _endpoints_
+> Persona-Grata allows the configuration of _minds_ (cognitive entity) from settings & _endpoints_
 > (e.g., custom local / remote servers) with existing _harnesses_ (e.g., Claude Code / Codex CLI)
 > to construct autonomous _agents_ (actors who can write code and/or perform other tasks).
 
 Known endpoints and harnesses already include their defaults, so required user setup is minimized.
-Cutsom configurations can be generated and supplied to end users for class, laboratory, and/or
+Custom configurations can be generated and supplied to end users for class, laboratory, and/or
 workplace purposes.
 
 ## Agent Configuration
@@ -72,7 +72,7 @@ clod:
   base_uri: "{{mind.endpoint}}/{{clod.__KEY__}}"       # Yields "https://api.clod.ai/clod"
 ```
 
-To accesss the direct parent an element, use the `__PARENT__` identifier:
+To access the direct parent of an element, use the `__PARENT__` identifier:
 ```
 clod:
   harness_desc: "{{__PARENT__.__KEY__}}'s fancy harness" # Yields "clod's fancy harness"
@@ -80,4 +80,5 @@ clod:
 
 ## Resources
 
-See CONFIG_MANUAL.md for details about defaults and setting non-default options.
+See the [Config Reference Manual](CONFIG_REFERENCE.md) for details about defaults and
+setting non-default options.

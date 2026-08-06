@@ -8,11 +8,18 @@ this manual. This document uses the following definitions throughout:
 If a value is required, it _must be supplied_ in any custom configuration. Otherwise, a default
 fallback value will be substituted for any absent keys in the configuration.
 
+Two conventions apply throughout:
+
+- **`None` means "unset".** Any setting may be given the value `None` to clear it. For a persona
+  or harness entry, this switches that entry off entirely (see `harnesses`, below).
+- **Unset values are not emitted.** Keys whose value is empty or unset are omitted from rendered
+  harness config files, so an unused `mind.model_2` does not become an env. variable set to `""`.
+
 ## Primary Elements
 
 Agents are configured via the definitions of three (3) primary elements:
 
-- **Mind**: The `endpoint`, `model`, and the `token_path` where the API key is stored.
+- **Mind**: The `endpoint` and `model` that provide the connitive function.
 - **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
 - **Harnesses**: Defines how to render the persona into the harness's native config (e.g., via
   templates and environment variables).
@@ -52,11 +59,23 @@ personas:
 
 Short-form description of the persona; defaults to string representation of persona root key.
 
+### `pid` -> `str`
+- Required: **No**
+- Default: (Set automatically to the persona's root key)
+
+Persona identifier, supplied for use in templates (e.g. `"{{persona_store}}/{{pid}}"`).
+
 ### `path` -> `str`
 - Required: **No**
 - Default: `"{{persona_store}}/{{__PARENT__.__KEY__}}"`
 
 Persona settings path.
+
+#### `token` -> `str`
+- Required: **No**
+- Default: `"{{path}}/token"`
+
+Auth token/key path (not sent if empty/unset).
 
 ### `mind` -> `NestedDict`
 - Required: **Yes**
@@ -72,20 +91,29 @@ Connection endpoint (e.g., URL).
 - Required: **No**
 - Default: `""`
 
-Model to use (not sent if empty/unset).
+Primary model to use (not sent if empty/unset).
 
-#### `mind.token_path` -> `str`
+#### `mind.model_1` ... `mind.model_4` -> `str`
 - Required: **No**
-- Default: `"{{path}}/token"`
+- Default: `""`
 
-Auth token/key path (not sent if empty/unset).
+Alternate models, in descending order of capability (not sent if empty/unset). A harness that
+offers model tiers maps them onto these; the Claude Code harness, for example, fills its
+opus/sonnet/haiku slots from `model_1`, `model_2`, and `model_3`.
 
 ### `harnesses` -> `NestedDict`
 - Required: **No**
 - Default: (Filled in with known harnesses)
 
-
 Map/Dict: `{(<harness>: <harness settings>)*}`.
+
+Every known harness is configured in addition to those listed here. To switch one off for this
+persona, set it to `None`:
+
+```yaml
+harnesses:
+  codex: None
+```
 
 ---
 
@@ -110,6 +138,12 @@ personas:
 
 Short-form description of the harness; defaults to string representation of harness root key.
 
+### `hid` -> `str`
+- Required: **No**
+- Default: (Set automatically to the harness's root key)
+
+Harness identifier, supplied for use in templates (e.g. `model_provider: "{{hid}}"`).
+
 ### `path` -> `str`
 - Required: **No**
 - Default: `"{{path}}/{{__PARENT__.__KEY__}}"`
@@ -132,17 +166,27 @@ Store variable for harness config path.
 - Required: **No**
 - Default: `""`
 
+Main harness config file to write. Nothing is written if this or `content` is empty/unset.
+
 ### `config_store` -> `NestedDict`
 - Required: **No**
-- Default: {}
+- Default: `{}`
 
-Store of config data, typically used to populate the `content` value. (default: empty dict)
+Store of config data, typically used to populate the `content` value. Nested maps are meaningful:
+they become nested JSON objects, or TOML tables (`{a: {b: {...}}}` renders as `[a.b]`).
 
 ### `content` -> `str`
 - Required: **No**
 - Default: `""`
 
-Content for main harness config (known harnesses have individual default values).
+Content for main harness config (known harnesses have individual default values). Usually built
+by serializing `config_store` with one of the terminal template calls below, which drop any
+empty/unset entries as they render:
+
+| Call | Renders as |
+|------|-----------|
+| `"{{config_store.__AS_JSON__()}}"` | Indented JSON |
+| `"{{config_store.__AS_TOML__()}}"` | TOML, nesting maps into tables |
 
 ### `base_uri` -> `str`
 - Required: **No**
@@ -172,4 +216,11 @@ Auth header variant (default OpenAI std).
 - Required: **No**
 - Default: `[]`
 
-List of header lines; may be omitted.
+List of header lines; may be omitted. `content-type: application/json` is always sent.
+
+#### `verify.body` -> `str`
+- Required: **No**
+- Default: (A minimal `"ping"` completion request using `mind.model`)
+
+Request body for the verification call. Supply this only if the endpoint rejects the standard
+single-message probe.
