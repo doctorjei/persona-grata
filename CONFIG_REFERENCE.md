@@ -85,11 +85,11 @@ Persona identifier, supplied for use in templates (e.g. `"{{persona_store}}/{{pi
 
 Persona settings path.
 
-#### `token` -> `str`
+### `token` -> `str`
 - Required: **No**
 - Default: `"{{path}}/token"`
 
-Auth token/key path (not sent if empty/unset).
+Auth token/key path (not sent if empty/unset). A sibling of `path`, not a child of it.
 
 ### `mind` -> `NestedDict`
 - Required: **Yes**
