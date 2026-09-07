@@ -52,5 +52,5 @@ First release.
   permissions and referenced by path via a `.secret_path` file.
 - Shell wrapper installation into `.bashrc` / `.zshrc`, launched as `<persona>-<harness>`.
 
-[0.0.2]: https://github.com/doctorjei/persona-grata/compare/v0.0.1...HEAD
+[0.0.2]: https://github.com/doctorjei/persona-grata/commits/main/
 [0.0.1]: https://pypi.org/project/persona-grata/0.0.1/

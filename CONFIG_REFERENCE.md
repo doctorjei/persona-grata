@@ -128,7 +128,7 @@ These settings go in a single entry for a custom harness configuration _for a pa
 ```yaml
 personas:
   orion:
-    ...
+    # ...persona settings...
     harnesses:
       clod:
         <configuration>

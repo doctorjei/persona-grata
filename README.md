@@ -2,7 +2,7 @@
 
 > **Persona-Grata** is a scaffolding utility that binds AI personas to harnesses to produce
 > an embodied, functional agent. It helps users connect professional LLM orchestration harnesses
-> (e.g., Claude Code and the Codex CLI) with customized endpoints.
+> (e.g., Claude Code, the Codex CLI, and Goose) with customized endpoints.
 
 ## Install
 
@@ -56,8 +56,8 @@ By combining a _persona_ with a _harness_, we get the fully embodied _agent_.
 
 The utility reads agent definitions from a provided YAML file (which describes how personas
 connect to harnesses) and configures your local environment. The sample `agents-example.yaml` file
-can serve as a starting point; the `claude` and `codex` profiles are 'ready' to go and do not
-require modification.
+can serve as a starting point; the bundled harness profiles are 'ready' to go and do not require
+modification.
 
 ### Known Endpoints & Harnesses
 
