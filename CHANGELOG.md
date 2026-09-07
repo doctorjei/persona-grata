@@ -34,6 +34,14 @@ All notable changes to this project are documented here. The format follows
 
 - The `disposition` (system prompt) placeholder from the kimi preset; no harness rendered it.
 
+### Fixed
+
+- The harness example in `CONFIG_REFERENCE.md` used a bare `...` line, which is YAML's
+  end-of-document marker, so the block could not be parsed as written.
+- `CUSTOM_AGENTS.md` now covers adding and removing harnesses: the `None` opt-out, rendering a
+  config file from `config_store` with a serializer, and configuring a harness by environment
+  with `wrapper_env`.
+
 ## [0.0.1] — 2026-08-06
 
 First release.
