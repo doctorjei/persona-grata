@@ -107,6 +107,34 @@ _Setup every persona in the file with all known harnesses._
 
 `pg` is a shorter alias for the same command: `pg kimi claude`.
 
+### Create a Configuration via CLI
+
+For one-off variants or local model servers, persona configurations can be defined by arguments:
+
+`pg --endpoint http://localhost:8675/v1 --model llama3 --no-token ollama claude`
+
+_Sets up a local Ollama model as the persona "ollama", for Claude Code._
+
+The CLI can also be used to update an existing persona:
+
+`pg --update --model kimi-k2-0905-preview kimi codex`
+
+_Sets kimi up with Codex CLI, using a different model just this once._
+
+By default, a definition is ephemeral, but the configuration can be exported if desired:
+
+`pg --endpoint http://who.dr:99/v1 --model llama3 --no-token --export "clauma.yaml" ollama claude`
+
+_Exports the configuration to `clauma.yaml`._
+
+Export, update, and new persona creation are mutually exclusive:
+
+| Flag | New OK? | Existing OK? | Writes? | Reads New? | Reads Existing? |
+|---|---|---|---|---|---|
+|`--export`| Yes | Yes | No | Yes | Yes | 
+|`--update`| No | Yes | Yes | Yes | Yes |
+|`--create`| Yes | No | Yes | Yes | Yes |
+
 ### Remove an Agent
 
 Pass `--remove` (or `-r`) to undo a setup — the shell wrapper and the harness's
@@ -128,6 +156,20 @@ and sourcing your config (`source ~/.bashrc`) or opening a new terminal, you can
 ```bash
 <persona>-<harness> [arguments]
 ```
+
+### Parameters Summary
+
+| Parameter | Sets |
+|------|------|
+| `--endpoint URL` | Set `mind.endpoint` to `URL` |
+| `--model NAME` | Set `mind.model` to `NAME` |
+| `--desc TEXT` | Set `persona_desc` to `TEXT` |
+| `--no-token` | `token` — no key prompt or verification* |
+| `--create` | Stores a new persona; fails if name is taken |
+| `--update` | Replace an existing persona, if it exists |
+| `--export FILE` | Export a template for this configuration to file named `FILE` |
+
+_*If the `--no-token` flag is not included, connections to keyless-only servers will fail._
 
 ## Agent Configuration & Templates
 

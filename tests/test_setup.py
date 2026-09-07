@@ -390,12 +390,12 @@ def test_removing_a_persona_that_was_never_set_up_still_fails(home):
         pg.main(["--remove", "never-existed", "claude"])
 
 
-def test_a_definition_is_one_shot_unless_persisted(home):
+def test_a_definition_is_ephemeral_unless_exported(home):
     path = home / "agents.yaml"
     path.write_text(BASIC)
     pg.main([str(path)] + LOCAL_FLAGS + ["ollama", "claude"])
 
-    assert "ollama" not in path.read_text()          # nothing recorded
+    assert "ollama" not in path.read_text()          # nothing written down
     with pytest.raises(SystemExit):                  # ...so it is gone next run
         pg.main([str(path), "ollama", "claude"])
 
@@ -411,10 +411,18 @@ def test_flags_override_an_existing_persona_without_clobbering_it(home):
 
 
 def test_inline_and_separated_flag_values_agree(home):
-    inline, _, _, one = pg._extract_options(["--model=m", "p"])
-    spaced, _, _, two = pg._extract_options(["--model", "m", "p"])
+    inline, *_, one = pg._extract_options(["--model=m", "p"])
+    spaced, *_, two = pg._extract_options(["--model", "m", "p"])
     assert inline == spaced == ["p"]
     assert one == two == {"mind": {"model": "m"}}
+
+
+def test_export_path_is_taken_by_flag_not_position(home):
+    positionals, *_, export_path, definition = pg._extract_options(
+        ["--endpoint", "http://x", "--export", "out.yaml", "p", "claude"])
+    assert positionals == ["p", "claude"]
+    assert export_path == "out.yaml"
+    assert definition == {"mind": {"endpoint": "http://x"}}
 
 
 def test_a_definition_needs_a_persona_to_name(home):
@@ -422,9 +430,104 @@ def test_a_definition_needs_a_persona_to_name(home):
         pg.main(["--model", "m"])
 
 
-def test_persist_needs_somewhere_to_record(home):
+def test_export_needs_a_persona_to_export(home):
     with pytest.raises(SystemExit):
-        pg.main(LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+        pg.main(["--export", str(home / "out.yaml")])
+
+
+def test_export_loads_an_existing_persona_then_applies_replacements(home):
+    import yaml
+    out = home / "out.yaml"
+    pg.main(["--model", "swapped", "--no-token",
+             "--export", str(out), "kimi", "codex"])
+    exported = yaml.safe_load(out.read_text())["personas"]["kimi"]
+
+    assert exported["mind"]["model"] == "swapped"                 # the flag applied
+    assert exported["mind"]["endpoint"] == "https://api.moonshot.ai"   # preset kept
+    assert exported["mind"]["model_1"] == "kimi-k2.7-code"             # and the rest
+    assert exported["persona_desc"] == "Kimi"
+
+
+def test_export_carries_the_presets_harness_settings(home):
+    import yaml
+    out = home / "out.yaml"
+    pg.main(["--no-token", "--export", str(out), "kimi", "codex"])
+    exported = yaml.safe_load(out.read_text())["personas"]["kimi"]
+    # kimi's preset points Claude Code at a different base_uri; a template that
+    # dropped it would not reproduce the agent it claims to describe.
+    assert exported["harnesses"]["claude"]["base_uri"] == "{{mind.endpoint}}/anthropic"
+
+
+def test_export_of_an_untouched_persona_needs_no_flags(home):
+    import yaml
+    path = home / "agents.yaml"
+    path.write_text("personas:\n  lab:\n    token: None\n"
+                    "    mind:\n      endpoint: 'http://localhost:9000/v1'\n"
+                    "      model: 'mistral'\n")
+    out = home / "out.yaml"
+    pg.main([str(path), "--export", str(out), "lab", "claude"])
+    exported = yaml.safe_load(out.read_text())["personas"]["lab"]
+    assert exported["mind"] == {"endpoint": "http://localhost:9000/v1", "model": "mistral"}
+
+
+def test_redefining_an_existing_persona_needs_update(home):
+    # kimi is a shipped preset, so this name is already taken. Silently
+    # replacing it would be an easy way to lose a working agent.
+    with pytest.raises(SystemExit):
+        pg.main(["--model", "swapped", "--no-token", "kimi", "codex"])
+
+
+def test_update_allows_replacing_an_existing_persona(home):
+    tomllib = pytest.importorskip("tomllib")
+    pg.main(["--update", "--model", "swapped", "--no-token", "kimi", "codex"])
+    written = tomllib.loads(
+        (home / ".config/personas/kimi/codex/config.toml").read_text())
+    assert written["model"] == "swapped"
+
+
+def test_update_is_not_needed_for_a_new_name(home):
+    pg.main(LOCAL_FLAGS + ["ollama", "claude"])       # no --update
+    assert (home / ".config/personas/ollama/claude/settings.json").exists()
+
+
+def test_update_requires_the_persona_to_exist(home):
+    # --update only updates: naming something that isn't there is a mistake,
+    # not an invitation to create it.
+    with pytest.raises(SystemExit):
+        pg.main(["--update", "--model", "m", "--no-token", "nosuch", "claude"])
+
+
+def test_export_sets_nothing_up(home):
+    # Export is the whole operation, not a step appended to a setup.
+    pg.main(["--export", str(home / "out.yaml"), "kimi", "codex"])
+    assert (home / "out.yaml").exists()
+    assert not (home / ".config" / "personas").exists()
+    assert not (home / ".bashrc").exists()
+
+
+@pytest.mark.parametrize("flag", ["--update", "--remove", "--create"])
+def test_export_is_exclusive_of_the_other_modes(home, flag):
+    with pytest.raises(SystemExit):
+        pg.main([flag, "--export", str(home / "out.yaml"), "kimi", "codex"])
+
+
+@pytest.mark.parametrize("pair", [("--create", "--update"), ("--create", "--remove"),
+                                  ("--update", "--remove")])
+def test_modes_are_mutually_exclusive(home, pair):
+    with pytest.raises(SystemExit):
+        pg.main([*pair, "--no-token", "kimi", "codex"])
+
+
+def test_create_is_the_default_spelled_out(home):
+    # --create only makes the default explicit, so that a script meaning
+    # "create" cannot silently update instead.
+    pg.main(["--create"] + LOCAL_FLAGS + ["ollama", "claude"])
+    assert (home / ".config/personas/ollama/claude/settings.json").exists()
+
+
+def test_create_refuses_a_taken_name_even_with_no_replacements(home):
+    with pytest.raises(SystemExit):
+        pg.main(["--create", "kimi", "claude"])
 
 
 COMMENTED = """\
@@ -438,10 +541,10 @@ personas:
 """
 
 
-def test_persist_records_the_persona_and_preserves_the_file(home):
+def test_export_records_the_persona_and_preserves_the_file(home):
     path = home / "agents.yaml"
     path.write_text(COMMENTED)
-    pg.main([str(path)] + LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+    pg.main(LOCAL_FLAGS + ["--export", str(path), "ollama", "claude"])
     text = path.read_text()
 
     # Comments survive: the file is edited as text, not re-serialized.
@@ -455,19 +558,19 @@ def test_persist_records_the_persona_and_preserves_the_file(home):
     assert reloaded["orion"]["mind"]["endpoint"] == "https://api.cybertron.space"
 
 
-def test_persist_writes_the_schema_placeholder_for_unset(home):
+def test_export_writes_the_schema_placeholder_for_unset(home):
     path = home / "agents.yaml"
     path.write_text(COMMENTED)
-    pg.main([str(path)] + LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+    pg.main(LOCAL_FLAGS + ["--export", str(path), "ollama", "claude"])
 
     assert "token: None" in path.read_text()         # not YAML's `null`
     assert pg.load_config(str(path))["personas"]["ollama"]["token"] is None
 
 
-def test_persist_leaves_an_already_defined_persona_alone(home, capsys):
+def test_export_leaves_an_already_defined_persona_alone(home, capsys):
     path = home / "agents.yaml"
     path.write_text(COMMENTED)
-    pg.main([str(path), "--model", "nope", "--persist", "orion", "claude"])
+    pg.main([str(path), "--model", "nope", "--export", str(path), "orion", "claude"])
 
     assert "nope" not in path.read_text()
     assert "already defined" in capsys.readouterr().out

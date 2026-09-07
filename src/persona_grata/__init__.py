@@ -64,12 +64,25 @@ These define the named persona if it is new, or override it if it exists:
   --desc TEXT      Short description                   (persona_desc)
   --no-token       Endpoint needs no key; skips the    (token)
                    key prompt and its verification
-  --persist        Record the definition in the named agents.yaml, so that
-                   later setup runs find it without repeating the flags.
+  --create         Write a new persona; fails if the name is taken. This is the
+                   default, so it is only worth naming to make the intent
+                   explicit -- a script that means "create" then cannot quietly
+                   do something else.
+  --update         Update an existing persona; fails if there is none by that
+                   name.
+  --export FILE    Write the persona's configuration to FILE and do nothing
+                   else. The persona is loaded first, so the export is its
+                   settings with any replacements above applied.
 
-A definition is otherwise one-shot: the agent is created in the persona store
-like any other, but the definition itself is not saved. Removing it by name
-still works -- everything --remove needs comes from the store.
+Which of the three a definition performs is explicit, so a name collision is
+never resolved silently:
+
+  --create         write a new persona -- fails if the name is taken (default)
+  --update         change an existing one -- fails if the name is free
+  --export FILE    write the configuration out; sets nothing up
+
+Removing an agent set up this way works by name alone: everything --remove
+needs comes from the persona store.
 
   # A local model needing no API key:
   persona-grata --endpoint http://localhost:11434/v1 --model llama3 \\
@@ -642,26 +655,30 @@ def _looks_like_config(arg):
 def _extract_options(args):
     """Split argv into positional arguments and the options that precede them.
 
-    Returns ``(positionals, removing, persist, definition)``, where *definition*
-    is a persona-shaped mapping of whatever the defining flags set -- empty when
-    none were given. Both ``--model NAME`` and ``--model=NAME`` are accepted.
+    Returns ``(positionals, removing, creating, updating, export_path, definition)``,
+    where *definition* is a persona-shaped mapping of whatever the defining flags
+    set -- empty when none were given. Both ``--model NAME`` and ``--model=NAME``
+    are accepted.
     """
     positionals, definition = [], {}
-    removing = persist = False
+    removing = updating = creating = False
+    export_path = None
     index = 0
     while index < len(args):
         arg = args[index]
         if arg in ("-r", "--remove"):
             removing = True
-        elif arg == "--persist":
-            persist = True
+        elif arg == "--update":
+            updating = True
+        elif arg == "--create":
+            creating = True
         elif arg == "--no-token":
             definition["token"] = None
         elif not arg.startswith("-"):
             positionals.append(arg)
         else:
             name, joined, inline = arg.partition("=")
-            if name not in _VALUE_FLAGS:
+            if name != "--export" and name not in _VALUE_FLAGS:
                 sys.exit(f"Error: unknown option '{name}'.\n\n{USAGE}")
             if joined:
                 value = inline
@@ -670,13 +687,16 @@ def _extract_options(args):
                 if index >= len(args):
                     sys.exit(f"Error: option '{name}' needs a value.\n\n{USAGE}")
                 value = args[index]
-            node = definition
-            *branches, leaf = _VALUE_FLAGS[name]
-            for key in branches:
-                node = node.setdefault(key, {})
-            node[leaf] = value
+            if name == "--export":
+                export_path = value
+            else:
+                node = definition
+                *branches, leaf = _VALUE_FLAGS[name]
+                for key in branches:
+                    node = node.setdefault(key, {})
+                node[leaf] = value
         index += 1
-    return positionals, removing, persist, definition
+    return positionals, removing, creating, updating, export_path, definition
 
 
 _PERSONAS_LINE = re.compile(r"^personas:[ \t]*$", re.M)
@@ -700,8 +720,27 @@ def _for_config_file(definition):
     return {key: placeholders(definition[key]) for key in ranked}
 
 
-def _persist_definition(path, persona_id, definition):
-    """Insert a command-line definition into the user's config file.
+def _authored_definition(persona_id, config_path, definition):
+    """The persona as *authored*, for export: preset, then user file, then flags.
+
+    Deliberately not the resolved tree, which is mostly derived values -- store
+    paths, rendered harness content, every default filled in. What belongs in a
+    template is the handful of settings someone would have written by hand, so
+    an existing agent exports as something recognisably like its own preset.
+    """
+    schema = load_yaml(DATA_DIR / "persona.default.yaml", ENV_DEFAULTS) or {}
+    authored = {}
+    deep_merge(_load_preset("persona", persona_id, ENV_DEFAULTS, schema), authored)
+    if config_path:
+        declared = _normalize_personas(load_yaml(config_path, ENV_DEFAULTS) or {})["personas"]
+        if isinstance(declared.get(persona_id), dict):
+            deep_merge(declared[persona_id], authored)
+    deep_merge(definition, authored)          # the flags are the last word
+    return authored
+
+
+def _export_definition(path, persona_id, definition):
+    """Write a persona definition out as an editable config template.
 
     Edited as text rather than re-serialized, because PyYAML cannot round-trip
     comments and a hand-written agents.yaml is mostly comments. The block goes
@@ -735,7 +774,7 @@ def _persist_definition(path, persona_id, definition):
             return
         cut = match.end() + 1
         Path(path).write_text(body[:cut] + indented + body[cut:])
-    print(f" - Recorded persona '{persona_id}' in {path}.")
+    print(f" - Exported persona '{persona_id}' to {path}.")
 
 
 def main(argv=None):
@@ -744,27 +783,50 @@ def main(argv=None):
         print(USAGE)
         return 0
 
-    args, removing, persist, definition = _extract_options(args)
+    args, removing, creating, updating, export_path, definition = _extract_options(args)
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
     chosen_harnesses = args
 
-    overrides = None
-    if definition:
-        if persona is None:
-            sys.exit("Error: a persona name is required when defining one on the "
-                     f"command line.\n\n{USAGE}")
-        overrides = {"personas": {persona: definition}}
-    if persist:
-        if not definition:
-            sys.exit(f"Error: --persist needs a definition to record.\n\n{USAGE}")
-        if config_path is None:
-            sys.exit("Error: --persist needs the agents.yaml to record the persona "
-                     f"in; name one before the persona.\n\n{USAGE}")
+    if definition and persona is None:
+        sys.exit("Error: a persona name is required when defining one on the "
+                 f"command line.\n\n{USAGE}")
+    if export_path and persona is None:
+        sys.exit(f"Error: --export needs a persona to export.\n\n{USAGE}")
+    modes = [name for name, chosen in (("--create", creating), ("--update", updating),
+                                       ("--export", export_path is not None),
+                                       ("--remove", removing)) if chosen]
+    if len(modes) > 1:
+        sys.exit(f"Error: {' and '.join(modes)} are separate modes; use one."
+                 f"\n\n{USAGE}")
 
-    config = load_config(config_path, overrides=overrides)
+    # --export is the whole operation, not an extra step: it writes the config
+    # out and sets nothing up, so none of the guards below apply -- nothing is
+    # being created or replaced to guard against.
+    if export_path:
+        authored = _authored_definition(persona, config_path, definition)
+        if not authored:
+            sys.exit(f"Error: unknown persona '{persona}'; nothing to export.\n\n{USAGE}")
+        _export_definition(export_path, persona, authored)
+        return 0
+
+    config = load_config(config_path)
     personas = config.get("personas") or {}
+
+    # Creating and updating are separate intents, and each says which one it is:
+    # --update requires the persona to exist, its absence requires that it does
+    # not. Either way a name collision is reported rather than silently resolved.
+    if updating and persona is not None and persona not in personas:
+        sys.exit(f"Error: persona '{persona}' does not exist; omit --update to "
+                 f"create it.\n\n{USAGE}")
+    if (definition or creating) and persona in personas and not updating:
+        sys.exit(f"Error: persona '{persona}' already exists; pass --update to "
+                 f"change it.\n\n{USAGE}")
+
+    if definition:
+        config = load_config(config_path, overrides={"personas": {persona: definition}})
+        personas = config.get("personas") or {}
 
     # A persona set up from flags alone exists in the store but in no config, so
     # removing it by name would not find it. Everything removal needs -- the
@@ -803,9 +865,10 @@ def main(argv=None):
             if _confirm(f"Also remove {pid}'s stored API token?"):
                 remove_persona_store(pid, config)
 
-    # Recorded only once the setup it describes has actually succeeded.
-    if persist and not removing:
-        _persist_definition(config_path, persona, definition)
+    # Written only once the setup it describes has actually succeeded.
+    if export_path and not removing:
+        _export_definition(export_path, persona,
+                           _authored_definition(persona, config_path, definition))
     return 0
 
 
