@@ -23,7 +23,7 @@ and `config_store` holds free-form harness data that is passed through untouched
 
 Agents are configured via the definitions of three (3) primary elements:
 
-- **Mind**: The `endpoint` and `model` that provide the connitive function.
+- **Mind**: The `endpoint` and `model` that provide the cognitive function.
 - **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
 - **Harnesses**: Defines how to render the persona into the harness's native config (e.g., via
   templates and environment variables).
@@ -34,14 +34,24 @@ Agents are configured via the definitions of three (3) primary elements:
 
 ### `persona_store` -> `str`
 - Required: **No**
-- Default: `"$XDG_CONFIG_HOME/personas"` (`~/.config/personas"` if `$XDG_CONFIG_HOME` unset/empty)
+- Default: `"$XDG_CONFIG_HOME/personas"` (`~/.config/personas` if `$XDG_CONFIG_HOME` unset/empty)
 
 Persona config path (endpoint, harnesses, etc.)
 
 ### `personas` -> `NestedDict`
 - Required: **Yes**
 
-Mapping of persona name (key) to its settings (value): `{(<persona>: <settings>)*}`. The value may also be a list of the names of known personas (e.g., "kimi-k3,...").
+Mapping of persona name (key) to its settings (value): `{(<persona>: <settings>)*}`. It may instead
+be a single persona name, or a list of names, when the shipped presets need no customization:
+
+```yaml
+personas: kimi              # one preset
+personas: [kimi, minimax]   # several
+```
+
+The personas named here are the ones the tool sets up when you don't name one on the command line.
+Every shipped preset is still *loaded* regardless, so an absolute reference such as
+`{{personas.kimi.mind.model}}` resolves from anywhere in the file.
 
 ---
 
