@@ -140,6 +140,8 @@ Persona-Grata supports a dynamic variable resolution system via `{{variable}}` s
 - **Reserved Identifiers**: `{{__PARENT__}}` resolves to the immediate parent node in the
   configuration tree and `{{__KEY__}}` to a node's own key, so `{{__PARENT__.__KEY__}}` in a
   persona definition yields that persona's ID.
+- **Templated Keys**: dict *keys* may hold templates too, so a config section can be named from a
+  value (e.g., `"{{hid}}":` under `model_providers` yields `[model_providers.codex]`).
 - **Serializers**: a reference may end in `__AS_JSON__()` or `__AS_TOML__()` to render a whole
   subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
 
