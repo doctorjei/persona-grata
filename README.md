@@ -142,8 +142,8 @@ Persona-Grata supports a dynamic variable resolution system via `{{variable}}` s
   persona definition yields that persona's ID.
 - **Templated Keys**: dict *keys* may hold templates too, so a config section can be named from a
   value (e.g., `"{{hid}}":` under `model_providers` yields `[model_providers.codex]`).
-- **Serializers**: a reference may end in `__AS_JSON__()` or `__AS_TOML__()` to render a whole
-  subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
+- **Serializers**: a reference may end in `__AS_JSON__()`, `__AS_TOML__()`, or `__AS_YAML__()` to
+  render a whole subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
 
 Environment variables (`$FOO`, `${FOO}`) are also substituted, in a single pass, before the file
 is parsed. Write `$$` for a literal dollar sign — `$$HOME` yields the text `$HOME`.

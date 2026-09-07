@@ -352,6 +352,30 @@ def test_toml_value_types_and_quoting():
     assert '"odd key" = "v"' in out
 
 
+def test_as_yaml_renders_block_style_in_declaration_order():
+    cfg = _resolve("""
+        pid: "navigator"
+        store:
+          GOOSE_PROVIDER: "openai"
+          GOOSE_MODEL: "{{pid}}-m1"
+          blank: ""
+        content: "{{store.__AS_YAML__()}}"
+    """)
+    # Declaration order, not alphabetical -- GOOSE_MODEL would sort first.
+    assert cfg["content"] == (
+        "GOOSE_PROVIDER: openai\n"
+        "GOOSE_MODEL: navigator-m1\n"
+    )
+
+
+def test_as_yaml_does_not_wrap_long_scalars():
+    # PyYAML folds at column 80 by default, which would split a long endpoint
+    # across lines: still valid YAML, but no longer greppable in the config.
+    url = "https://api.example.com/" + "x" * 120
+    out = te.to_yaml({"OPENAI_HOST": url})
+    assert out == f"OPENAI_HOST: {url}\n"
+
+
 def test_serializer_must_terminate_chain():
     with pytest.raises(te.TemplateError):
         _resolve('a:\n  b: "x"\nc: "{{a.__AS_JSON__().d}}"\n')
@@ -359,7 +383,7 @@ def test_serializer_must_terminate_chain():
 
 def test_unknown_serializer_raises():
     with pytest.raises(te.TemplateError):
-        _resolve('a:\n  b: "x"\nc: "{{a.__AS_YAML__()}}"\n')
+        _resolve('a:\n  b: "x"\nc: "{{a.__AS_XML__()}}"\n')
 
 
 ROUND_TRIP_CASES = {
@@ -387,6 +411,12 @@ def test_to_toml_round_trips_through_a_real_parser(data):
 def test_to_json_round_trips(data):
     import json
     assert json.loads(te.to_json(data)) == te.prune(data)
+
+
+@pytest.mark.parametrize("data", ROUND_TRIP_CASES.values(), ids=list(ROUND_TRIP_CASES))
+def test_to_yaml_round_trips_through_a_real_parser(data):
+    import yaml
+    assert yaml.safe_load(te.to_yaml(data)) == te.prune(data)
 
 
 def test_serializer_defers_until_subtree_is_resolved():

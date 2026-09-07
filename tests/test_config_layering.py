@@ -231,13 +231,16 @@ def test_claude_content_is_valid_json_with_unset_models_pruned(tmp_path):
 
 def test_every_shipped_harness_renders_a_parseable_config_file():
     tomllib = pytest.importorskip("tomllib")
+    import yaml
+    parsers = {".toml": tomllib.loads, ".yaml": yaml.safe_load, ".json": json.loads}
     cfg = pg.load_config()
     for pid, persona in cfg["personas"].items():
         for hid, harness in persona["harnesses"].items():
             content, config_file = harness["content"], harness["config_file"]
             if not (content and config_file):
                 continue
-            parse = tomllib.loads if config_file.endswith(".toml") else json.loads
+            suffix = config_file[config_file.rfind("."):]
+            parse = parsers.get(suffix, json.loads)
             parse(content)          # raises -> the preset ships a broken config
 
 

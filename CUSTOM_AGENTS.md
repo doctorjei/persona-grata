@@ -104,8 +104,8 @@ A harness you name that isn't known is created from the harness defaults, so a c
 only what differs. There are two ways to configure one.
 
 **By config file.** Put the harness's settings in `config_store` and render them into `content`
-with a serializer — `__AS_JSON__()` or `__AS_TOML__()`. Nested maps become nested JSON objects or
-TOML tables, and empty/unset entries are dropped:
+with a serializer — `__AS_JSON__()`, `__AS_TOML__()`, or `__AS_YAML__()`. Nested maps become nested
+JSON objects, TOML tables, or YAML blocks, and empty/unset entries are dropped:
 
 ```
 personas:
@@ -126,9 +126,9 @@ personas:
         content: "{{config_store.__AS_TOML__()}}"
 ```
 
-**By environment.** Some harnesses cannot be pointed at a per-persona config directory. Use
-`wrapper_env` instead; those variables are exported by the generated shell wrapper, and no config
-file is written. This is how the bundled Goose harness works:
+**By environment.** Some harnesses cannot be pointed at a per-persona config directory. Leave
+`config_file` unset and use `wrapper_env` instead; those variables are exported by the generated
+shell wrapper, and no config file is written:
 
 ```
 personas:
@@ -137,13 +137,19 @@ personas:
       endpoint: "https://api.cybertron.space"
       model: "alpha-3-on"
     harnesses:
-      goose:
-        auth_var: "OPENAI_API_KEY"
+      apex:
+        auth_var: "APEX_API_KEY"
         wrapper_env:
-          GOOSE_PROVIDER: "openai"
-          GOOSE_MODEL: "{{mind.model}}"
-          OPENAI_HOST: "{{base_uri}}"
+          APEX_PROVIDER: "openai"
+          APEX_MODEL: "{{mind.model}}"
+          APEX_HOST: "{{base_uri}}"
 ```
+
+All three bundled harnesses relocate, so none of them need this: Claude Code takes
+`CLAUDE_CONFIG_DIR`, the Codex CLI takes `CODEX_HOME`, and Goose takes `GOOSE_PATH_ROOT`. The last
+of those re-roots goose's entire tree, so its config lands at `$GOOSE_PATH_ROOT/config/config.yaml`
+— note the extra `config` segment — with its data and state alongside. The path must be absolute or
+goose ignores it silently and falls back to the shared `~/.config/goose`.
 
 Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key
 is visible rather than silent. Persona and harness _names_ are yours to choose and are never

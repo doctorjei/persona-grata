@@ -1,16 +1,29 @@
 ##################################################################################################
 # Goose Harness Settings
 #
-# Goose has no environment variable that relocates its config directory (it reads
-# ~/.config/goose/config.yaml), so a per-persona config file cannot be isolated the way it can
-# for Claude Code and the Codex CLI. Everything is passed through the wrapper's environment
-# instead, which takes precedence over the config file. `config_file` is therefore left unset
-# and nothing is written to disk.
+# GOOSE_PATH_ROOT re-roots goose's whole directory tree -- config, data, state, and .agents -- so
+# each persona gets its own, the same way CODEX_HOME does for the Codex CLI. Two sharp edges:
+#
+#   * The path MUST be absolute. Goose filters on `is_absolute()` and silently falls back to
+#     ~/.config/goose if it is not, with no error. `path` resolves under `persona_store`, which
+#     defaults to an absolute $XDG_CONFIG_HOME.
+#   * Note the extra "config" segment: goose reads $GOOSE_PATH_ROOT/config/config.yaml.
+#
+# Keys are UPPERCASE in the config file, not just in the environment -- goose looks the file up by
+# the same name it uses for the env var. Environment still outranks the file, so `wrapper_env` can
+# override any of these per invocation.
+#
+# The token stays in the environment via `auth_var` rather than being written here: goose reads
+# every provider secret from the environment when the primary one is set, which keeps the key out
+# of both this file and the shared system keyring.
 
 goose:
   harness_desc: "Goose"
   auth_var: "OPENAI_API_KEY"
-  wrapper_env:
+  path_var: "GOOSE_PATH_ROOT"
+  config_file: "{{path}}/config/config.yaml"
+  config_store:
     GOOSE_PROVIDER: "openai"                     # Built-in provider used for OpenAI-compatible APIs
     GOOSE_MODEL: "{{mind.model}}"
     OPENAI_HOST: "{{base_uri}}"                  # Base URI; OPENAI_BASE_PATH supplies /v1/...
+  content: "{{config_store.__AS_YAML__()}}"

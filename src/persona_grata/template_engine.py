@@ -138,9 +138,25 @@ def to_toml(value):
     return "\n".join(out).strip() + "\n"
 
 
+_NO_WRAP = 1 << 30          # PyYAML wraps at `width`; this is "effectively never".
+
+
+def to_yaml(value):
+    """Render a subtree as block-style YAML (unset entries pruned).
+
+    Key order is preserved rather than sorted, so a rendered config reads in the
+    order its preset declares it, and scalars are never line-wrapped -- a folded
+    endpoint URL is valid YAML but no longer greppable in the file it lands in.
+    """
+    import yaml
+    return yaml.safe_dump(prune(value), default_flow_style=False, sort_keys=False,
+                          allow_unicode=True, width=_NO_WRAP)
+
+
 _SERIALIZERS = {
     "__AS_JSON__": to_json,
     "__AS_TOML__": to_toml,
+    "__AS_YAML__": to_yaml,
 }
 
 

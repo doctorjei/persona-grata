@@ -163,17 +163,53 @@ def test_missing_endpoint_is_fatal(home):
 
 
 def test_wrapper_env_is_exported(home):
-    # Goose has no relocatable config dir, so it is configured entirely through
+    # A harness with no relocatable config dir is configured entirely through
     # the wrapper's environment.
-    pg.setup_harness("orion", "goose", config(home, BASIC))
+    pg.setup_harness("orion", "bare", config(home, BASIC + """\
+    harnesses:
+      bare:
+        auth_var: "BARE_KEY"
+        wrapper_env:
+          BARE_PROVIDER: "openai"
+          BARE_MODEL: "{{mind.model}}"
+          BARE_HOST: "{{base_uri}}"
+"""))
     rc = (home / ".bashrc").read_text()
-    assert 'GOOSE_PROVIDER="openai"' in rc
-    assert 'GOOSE_MODEL="alpha-3-on"' in rc
-    assert 'OPENAI_HOST="https://api.cybertron.space"' in rc
-    assert 'OPENAI_API_KEY="$(cat ' in rc
+    assert 'BARE_PROVIDER="openai"' in rc
+    assert 'BARE_MODEL="alpha-3-on"' in rc
+    assert 'BARE_HOST="https://api.cybertron.space"' in rc
+    assert 'BARE_KEY="$(cat ' in rc
     subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
     # ...and nothing is written to disk for it.
-    assert not list((home / ".config" / "personas" / "orion" / "goose").glob("*"))
+    assert not list((home / ".config" / "personas" / "orion" / "bare").glob("*"))
+
+
+def test_goose_isolates_its_whole_directory_tree(home):
+    # Goose is relocated wholesale via GOOSE_PATH_ROOT, so it gets the same
+    # treatment as codex/claude rather than being configured from the wrapper.
+    import yaml
+    pg.setup_harness("orion", "goose", config(home, BASIC))
+    root = home / ".config" / "personas" / "orion" / "goose"
+
+    rc = (home / ".bashrc").read_text()
+    assert f'GOOSE_PATH_ROOT="{root}"' in rc
+    assert 'OPENAI_API_KEY="$(cat ' in rc
+    subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
+
+    # Goose appends its own "config" segment under the root it is given.
+    written = yaml.safe_load((root / "config" / "config.yaml").read_text())
+    assert written == {
+        "GOOSE_PROVIDER": "openai",
+        "GOOSE_MODEL": "alpha-3-on",
+        "OPENAI_HOST": "https://api.cybertron.space",
+    }
+
+
+def test_goose_path_root_is_absolute(home):
+    # Goose silently ignores a relative GOOSE_PATH_ROOT and falls back to the
+    # shared ~/.config/goose, which would defeat the isolation entirely.
+    cfg = config(home, BASIC)
+    assert cfg["personas"]["orion"]["harnesses"]["goose"]["path"].startswith("/")
 
 
 def test_wrapper_env_skips_blank_values(home):

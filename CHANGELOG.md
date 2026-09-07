@@ -12,8 +12,12 @@ All notable changes to this project are documented here. The format follows
 - `--remove` / `-r` removes an agent: the shell wrapper and the harness's config directory. Once
   every harness for a persona is gone, offers to delete its stored API token. Refuses to delete a
   home or root directory even if a config points there.
-- Goose harness preset. Goose has no environment variable that relocates its config directory, so
-  it is configured entirely through the wrapper's environment rather than a written config file.
+- Goose harness preset. `GOOSE_PATH_ROOT` re-roots goose's whole directory tree, so each persona
+  gets its own config, data, and state — the same isolation `CODEX_HOME` gives the Codex CLI. The
+  config lands at `$GOOSE_PATH_ROOT/config/config.yaml`; the API key stays in the environment,
+  which keeps it out of both that file and the shared system keyring.
+- `__AS_YAML__()` serializer, rendering a `config_store` subtree as block-style YAML with keys in
+  declaration order.
 - `wrapper_env` harness setting: extra environment variables exported by the shell wrapper, for
   harnesses configured by environment rather than by a config file.
 - Unknown settings keys are reported as warnings instead of being silently ignored. Persona and

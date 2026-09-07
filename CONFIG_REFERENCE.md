@@ -181,9 +181,10 @@ Store variable for harness config path.
 - Default: `{}`
 
 Extra environment variables exported by the generated shell wrapper: `{(<NAME>: <value>)*}`. This
-is how a harness with no relocatable config directory is configured — the Goose preset sets
-`GOOSE_PROVIDER`, `GOOSE_MODEL`, and `OPENAI_HOST` this way and writes no file at all. Entries with
-an empty/unset value are not exported.
+is how a harness with no relocatable config directory is configured: set its knobs here and leave
+`config_file` empty, so nothing is written to disk. None of the bundled harnesses need this — all
+three relocate — but it stays the escape hatch for one that cannot. Entries with an empty/unset
+value are not exported.
 
 ### `config_file` -> `str`
 - Required: **No**
@@ -196,7 +197,8 @@ Main harness config file to write. Nothing is written if this or `content` is em
 - Default: `{}`
 
 Store of config data, typically used to populate the `content` value. Nested maps are meaningful:
-they become nested JSON objects, or TOML tables (`{a: {b: {...}}}` renders as `[a.b]`).
+they become nested JSON objects, nested YAML blocks, or TOML tables (`{a: {b: {...}}}` renders as
+`[a.b]`).
 
 ### `content` -> `str`
 - Required: **No**
@@ -210,6 +212,7 @@ empty/unset entries as they render:
 |------|-----------|
 | `"{{config_store.__AS_JSON__()}}"` | Indented JSON |
 | `"{{config_store.__AS_TOML__()}}"` | TOML, nesting maps into tables |
+| `"{{config_store.__AS_YAML__()}}"` | Block-style YAML, keys in declaration order |
 
 ### `base_uri` -> `str`
 - Required: **No**
