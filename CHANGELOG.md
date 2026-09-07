@@ -16,6 +16,18 @@ All notable changes to this project are documented here. The format follows
   gets its own config, data, and state — the same isolation `CODEX_HOME` gives the Codex CLI. The
   config lands at `$GOOSE_PATH_ROOT/config/config.yaml`; the API key stays in the environment,
   which keeps it out of both that file and the shared system keyring.
+- Define a persona from the command line, with no config file to write: `--endpoint`, `--model`,
+  `--desc`, and `--no-token`. Chiefly for pointing an agent at a locally-run model —
+  `pg --endpoint http://localhost:11434/v1 --model llama3 --no-token ollama claude`. The flags
+  define the named persona if it is new and override it if it exists, so they also serve for a
+  one-off change to a shipped preset.
+- `--persist` records such a definition in the named `agents.yaml`, so later setup runs find it
+  without repeating the flags. The file is edited as text, leaving its comments and formatting
+  intact, and a persona it already defines is left as written.
+- `--remove <persona>` now works for a persona that exists in the store but in no config file,
+  which is what a command-line definition produces. Everything removal needs derives from the
+  persona id, so the flags no longer have to be repeated just to undo a setup. An unknown name
+  with nothing in the store is still an error rather than a silent success.
 - `__AS_YAML__()` serializer, rendering a `config_store` subtree as block-style YAML with keys in
   declaration order.
 - `wrapper_env` harness setting: extra environment variables exported by the shell wrapper, for

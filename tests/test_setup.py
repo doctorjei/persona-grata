@@ -317,3 +317,157 @@ def test_cli_remove_offers_the_token_only_when_all_harnesses_go(home, monkeypatc
 def test_unknown_option_is_rejected(home):
     with pytest.raises(SystemExit):
         pg.main(["--bogus", "kimi"])
+
+
+# --------------------------------------------------------------------------- #
+# Defining a persona on the command line
+# --------------------------------------------------------------------------- #
+LOCAL_FLAGS = ["--endpoint", "http://localhost:11434/v1", "--model", "llama3", "--no-token"]
+
+
+def test_flags_define_a_persona_with_no_config_file(home):
+    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
+    settings = json.loads(
+        (home / ".config/personas/ollama/claude/settings.json").read_text())
+    assert settings["model"] == "llama3"
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+    assert "ollama-claude" in (home / ".bashrc").read_text()
+
+
+def test_no_token_skips_the_key_prompt_and_its_verification(home, monkeypatch):
+    # A local endpoint usually has no key to paste and nothing to verify against.
+    def fail(*a, **kw):
+        raise AssertionError("should not prompt or verify")
+    monkeypatch.setattr(pg, "_prompt_key", fail)
+    monkeypatch.setattr(pg, "_verify_key", fail)
+
+    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
+    assert not (home / ".config/personas/ollama/token").exists()
+
+
+def test_agent_desc_defaults_to_the_wrapper_command_name(home):
+    # The agent's display name and the command you type to run it should be the
+    # same string; anything else means the setup notes tell you the wrong thing.
+    cfg = config(home, BASIC)
+    for hid in ("claude", "codex", "goose"):
+        assert cfg["personas"]["orion"]["harnesses"][hid]["agent_desc"] == f"orion-{hid}"
+
+
+def test_agent_desc_is_overridable_per_harness(home):
+    cfg = config(home, BASIC + """\
+    harnesses:
+      claude:
+        agent_desc: "Orion (chat)"
+""")
+    harnesses = cfg["personas"]["orion"]["harnesses"]
+    assert harnesses["claude"]["agent_desc"] == "Orion (chat)"
+    assert harnesses["codex"]["agent_desc"] == "orion-codex"      # others unaffected
+
+
+def test_setup_announces_the_agent_by_its_command_name(home, capsys):
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    out = capsys.readouterr().out
+    assert "orion-claude Setup Script" in out
+    assert "To run orion-claude" in out
+
+
+def test_a_store_only_persona_is_removable_by_name(home):
+    # Defined by flags, so it exists in the store but in no config file. Removal
+    # needs only paths, which derive from the id -- so it must not need the flags
+    # repeated just to undo itself.
+    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
+    assert (home / ".config/personas/ollama/claude").is_dir()
+
+    pg.main(["--remove", "ollama", "claude"])
+    assert not (home / ".config/personas/ollama/claude").exists()
+    assert "ollama-claude" not in (home / ".bashrc").read_text()
+
+
+def test_removing_a_persona_that_was_never_set_up_still_fails(home):
+    # The store is what makes the rebuild legitimate; without it, a name that
+    # resolves to nothing is a typo and should say so.
+    with pytest.raises(SystemExit):
+        pg.main(["--remove", "never-existed", "claude"])
+
+
+def test_a_definition_is_one_shot_unless_persisted(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main([str(path)] + LOCAL_FLAGS + ["ollama", "claude"])
+
+    assert "ollama" not in path.read_text()          # nothing recorded
+    with pytest.raises(SystemExit):                  # ...so it is gone next run
+        pg.main([str(path), "ollama", "claude"])
+
+
+def test_flags_override_an_existing_persona_without_clobbering_it(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    cfg = pg.load_config(str(path),
+                         overrides={"personas": {"orion": {"mind": {"model": "swapped"}}}})
+    mind = cfg["personas"]["orion"]["mind"]
+    assert mind["model"] == "swapped"                # the flag won
+    assert mind["endpoint"] == "https://api.cybertron.space"    # the rest survived
+
+
+def test_inline_and_separated_flag_values_agree(home):
+    inline, _, _, one = pg._extract_options(["--model=m", "p"])
+    spaced, _, _, two = pg._extract_options(["--model", "m", "p"])
+    assert inline == spaced == ["p"]
+    assert one == two == {"mind": {"model": "m"}}
+
+
+def test_a_definition_needs_a_persona_to_name(home):
+    with pytest.raises(SystemExit):
+        pg.main(["--model", "m"])
+
+
+def test_persist_needs_somewhere_to_record(home):
+    with pytest.raises(SystemExit):
+        pg.main(LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+
+
+COMMENTED = """\
+# A hand-written config; the comments are the point.
+personas:
+  orion:                                   # already here
+    mind:
+      endpoint: "https://api.cybertron.space"
+
+# trailing comment, after the personas block
+"""
+
+
+def test_persist_records_the_persona_and_preserves_the_file(home):
+    path = home / "agents.yaml"
+    path.write_text(COMMENTED)
+    pg.main([str(path)] + LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+    text = path.read_text()
+
+    # Comments survive: the file is edited as text, not re-serialized.
+    assert "# A hand-written config; the comments are the point." in text
+    assert "# already here" in text
+    assert "# trailing comment, after the personas block" in text
+
+    # The block lands *inside* personas, not appended past the end of the file.
+    reloaded = pg.load_config(str(path))["personas"]
+    assert reloaded["ollama"]["mind"]["model"] == "llama3"
+    assert reloaded["orion"]["mind"]["endpoint"] == "https://api.cybertron.space"
+
+
+def test_persist_writes_the_schema_placeholder_for_unset(home):
+    path = home / "agents.yaml"
+    path.write_text(COMMENTED)
+    pg.main([str(path)] + LOCAL_FLAGS + ["--persist", "ollama", "claude"])
+
+    assert "token: None" in path.read_text()         # not YAML's `null`
+    assert pg.load_config(str(path))["personas"]["ollama"]["token"] is None
+
+
+def test_persist_leaves_an_already_defined_persona_alone(home, capsys):
+    path = home / "agents.yaml"
+    path.write_text(COMMENTED)
+    pg.main([str(path), "--model", "nope", "--persist", "orion", "claude"])
+
+    assert "nope" not in path.read_text()
+    assert "already defined" in capsys.readouterr().out

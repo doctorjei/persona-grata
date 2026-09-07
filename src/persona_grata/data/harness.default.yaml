@@ -2,6 +2,8 @@
 # Harness Default Settings
 
 harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
+agent_desc: "{{pid}}-{{hid}}"                    # Agent (persona + harness) display name; matches
+                                                 #   the installed wrapper's command name
 path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
 auth_var: "API_KEY"                              # Env. variable holding key/token
 path_var: ""                                     # Store var., harness config path (default: none)

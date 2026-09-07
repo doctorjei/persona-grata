@@ -45,8 +45,8 @@ _UNSET_TOKENS = {"none", "null"}
 
 USAGE = """\
 Usage:
-  persona-grata [--remove] <persona> [harness ...]
-  persona-grata [--remove] <agents.yaml> [persona] [harness ...]
+  persona-grata [options] <persona> [harness ...]
+  persona-grata [options] <agents.yaml> [persona] [harness ...]
 
 Omit the harness names to act on every harness known to that persona; omit the
 persona too to act on every persona in the configuration.
@@ -56,7 +56,33 @@ persona too to act on every persona in the configuration.
                  all of its harnesses are gone.
   -h, --help     Show this message.
 
+Defining a persona on the command line, instead of writing an agents.yaml.
+These define the named persona if it is new, or override it if it exists:
+
+  --endpoint URL   API endpoint                        (mind.endpoint)
+  --model NAME     Primary model                       (mind.model)
+  --desc TEXT      Short description                   (persona_desc)
+  --no-token       Endpoint needs no key; skips the    (token)
+                   key prompt and its verification
+  --persist        Record the definition in the named agents.yaml, so that
+                   later setup runs find it without repeating the flags.
+
+A definition is otherwise one-shot: the agent is created in the persona store
+like any other, but the definition itself is not saved. Removing it by name
+still works -- everything --remove needs comes from the store.
+
+  # A local model needing no API key:
+  persona-grata --endpoint http://localhost:11434/v1 --model llama3 \\
+                --no-token ollama claude
+
 `pg` is a shorter alias for `persona-grata`."""
+
+# Command-line flags that define a persona, mapped to their path in the schema.
+_VALUE_FLAGS = {
+    "--endpoint": ("mind", "endpoint"),
+    "--model": ("mind", "model"),
+    "--desc": ("persona_desc",),
+}
 
 
 def deep_merge(source, destination):
@@ -200,7 +226,7 @@ def _drop_disabled(config):
     return config
 
 
-def load_config(path=None, env_defaults=None):
+def load_config(path=None, env_defaults=None, overrides=None):
     """Assemble and resolve the full configuration tree.
 
     Layered bottom-up, each stage overriding the last -- most specific wins::
@@ -208,6 +234,10 @@ def load_config(path=None, env_defaults=None):
         persona:  Global Default -> Persona Default -> Persona Preset -> User
         harness:  Harness Default -> Harness Preset
                                   -> Persona Preset's harnesses.<hid> -> User
+
+    ``overrides`` is a user-config-shaped mapping layered *over* the file, for
+    definitions supplied on the command line. It is applied before layering, so
+    a persona that exists only in ``overrides`` is built like any other.
 
     Every persona -- the user's and the shipped presets alike -- is built, so
     that absolute references such as ``{{personas.orion.mind.model}}`` resolve
@@ -226,6 +256,10 @@ def load_config(path=None, env_defaults=None):
         if not isinstance(user_cfg, dict):
             sys.exit(f"Error: Configuration file {path} is not a mapping.")
     user_cfg = _normalize_personas(user_cfg)
+    # Command-line definitions are the most specific input there is, so they go
+    # on top of the file before anything is layered.
+    if overrides:
+        deep_merge(_normalize_personas(copy.deepcopy(overrides)), user_cfg)
     users_personas = user_cfg["personas"]
 
     # 2. Global defaults.
@@ -410,6 +444,7 @@ def setup_harness(persona_id, harness_id, config):
     token_path = _path(persona["token"]) if persona.get("token") else None
 
     harness_desc = harness.get("harness_desc") or harness_id
+    agent_desc = harness.get("agent_desc") or f"{persona_id}-{harness_id}"
     config_dir = harness.get("path")
     if not config_dir:
         sys.exit(f"Error: harness '{harness_id}' resolved an empty 'path'.")
@@ -422,7 +457,7 @@ def setup_harness(persona_id, harness_id, config):
     verify = harness.get("verify")
 
     print("\n===========================================================================")
-    print(f"    {persona_desc} & {harness_desc} Setup Script")
+    print(f"    {agent_desc} Setup Script  ({persona_desc} & {harness_desc})")
     print("===========================================================================\n")
 
     # 1. Token: keep an existing one on request, else prompt + verify + write.
@@ -456,7 +491,7 @@ def setup_harness(persona_id, harness_id, config):
 
     # 5. Shell wrapper
     _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
-      config_dir, token_path, path_var, auth_var, wrapper_env)
+      config_dir, token_path, path_var, auth_var, wrapper_env, agent_desc)
 
 
 def _rc_file():
@@ -481,9 +516,10 @@ def _strip_wrapper(content, persona_id, harness_id, persona_desc=None, harness_d
 
 
 def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
-      config_dir, token_path, path_var, auth_var, wrapper_env=None):
+      config_dir, token_path, path_var, auth_var, wrapper_env=None, agent_desc=None):
     rc_file = _rc_file()
     cmd_name = f"{persona_id}-{harness_id}"
+    agent_desc = agent_desc or cmd_name
 
     # Only emit assignments the harness actually uses; an empty name would
     # otherwise become a bare `="..."` word and break the function.
@@ -516,7 +552,7 @@ def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
     print("-----------")
     print(f"1. Before use, open a new terminal or run `source {rc_file}`.")
     print(f"2. Running {harness_id} still uses its native models (settings unchanged).\n")
-    print(f"To run {persona_desc} with {harness_desc}")
+    print(f"To run {agent_desc} ({persona_desc} with {harness_desc})")
     print("----------------------------------------------------------------------------")
     print(f"> {cmd_name}\n")
 
@@ -564,8 +600,9 @@ def remove_harness(persona_id, harness_id, config):
 
     persona_desc = persona.get("persona_desc") or persona_id
     harness_desc = harness.get("harness_desc") or harness_id
+    agent_desc = harness.get("agent_desc") or f"{persona_id}-{harness_id}"
 
-    print(f"\nRemoving {persona_desc} & {harness_desc} ({persona_id}-{harness_id})")
+    print(f"\nRemoving {agent_desc} ({persona_desc} & {harness_desc})")
 
     rc_file = _rc_file()
     if rc_file.exists():
@@ -602,24 +639,143 @@ def _looks_like_config(arg):
     return arg.endswith((".yaml", ".yml"))
 
 
+def _extract_options(args):
+    """Split argv into positional arguments and the options that precede them.
+
+    Returns ``(positionals, removing, persist, definition)``, where *definition*
+    is a persona-shaped mapping of whatever the defining flags set -- empty when
+    none were given. Both ``--model NAME`` and ``--model=NAME`` are accepted.
+    """
+    positionals, definition = [], {}
+    removing = persist = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in ("-r", "--remove"):
+            removing = True
+        elif arg == "--persist":
+            persist = True
+        elif arg == "--no-token":
+            definition["token"] = None
+        elif not arg.startswith("-"):
+            positionals.append(arg)
+        else:
+            name, joined, inline = arg.partition("=")
+            if name not in _VALUE_FLAGS:
+                sys.exit(f"Error: unknown option '{name}'.\n\n{USAGE}")
+            if joined:
+                value = inline
+            else:
+                index += 1
+                if index >= len(args):
+                    sys.exit(f"Error: option '{name}' needs a value.\n\n{USAGE}")
+                value = args[index]
+            node = definition
+            *branches, leaf = _VALUE_FLAGS[name]
+            for key in branches:
+                node = node.setdefault(key, {})
+            node[leaf] = value
+        index += 1
+    return positionals, removing, persist, definition
+
+
+_PERSONAS_LINE = re.compile(r"^personas:[ \t]*$", re.M)
+
+
+def _for_config_file(definition):
+    """A flag definition as it should read *in* an agents.yaml.
+
+    Ordered to match the schema rather than the order the flags happened to be
+    typed in, and unset written as the schema's ``None`` placeholder rather than
+    YAML's ``null`` -- both spellings load back to the same thing, but only one
+    matches every other file in the project.
+    """
+    def placeholders(value):
+        if isinstance(value, dict):
+            return {k: placeholders(v) for k, v in value.items()}
+        return "None" if value is None else value
+
+    order = ("persona_desc", "path", "token", "mind", "harnesses")
+    ranked = sorted(definition, key=lambda k: (order.index(k) if k in order else len(order), k))
+    return {key: placeholders(definition[key]) for key in ranked}
+
+
+def _persist_definition(path, persona_id, definition):
+    """Insert a command-line definition into the user's config file.
+
+    Edited as text rather than re-serialized, because PyYAML cannot round-trip
+    comments and a hand-written agents.yaml is mostly comments. The block goes
+    directly under ``personas:`` -- appending to the end of the file would land
+    outside that mapping whenever it is not the last thing in the file.
+
+    Declines rather than guesses in the two cases it cannot place safely: a
+    persona the file already defines (merging would mean a full rewrite) and a
+    ``personas`` written in flow or shorthand form (no line to insert after).
+    """
+    body = Path(path).read_text() if Path(path).exists() else ""
+    existing = load_yaml(path) or {}
+    block = yaml.safe_dump({persona_id: _for_config_file(definition)},
+                           default_flow_style=False, sort_keys=False,
+                           allow_unicode=True, width=te._NO_WRAP)
+    indented = "".join("  " + line if line.strip() else line
+                       for line in block.splitlines(keepends=True))
+
+    if isinstance(existing, dict) and persona_id in (existing.get("personas") or {}):
+        print(f" - '{persona_id}' is already defined in {path}; left as written.")
+        return
+
+    if not isinstance(existing, dict) or "personas" not in existing:
+        prefix = "" if not body or body.endswith("\n") else "\n"
+        Path(path).write_text(body + prefix + "personas:\n" + indented)
+    else:
+        match = _PERSONAS_LINE.search(body)
+        if not match:
+            print(f" - Cannot place '{persona_id}' in {path} automatically; its "
+                  f"'personas' is not a block mapping. Add this by hand:\n\n{indented}")
+            return
+        cut = match.end() + 1
+        Path(path).write_text(body[:cut] + indented + body[cut:])
+    print(f" - Recorded persona '{persona_id}' in {path}.")
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if any(a in ("-h", "--help") for a in args):
         print(USAGE)
         return 0
 
-    removing = any(a in ("-r", "--remove") for a in args)
-    args = [a for a in args if a not in ("-r", "--remove")]
-    for arg in args:
-        if arg.startswith("-"):
-            sys.exit(f"Error: unknown option '{arg}'.\n\n{USAGE}")
+    args, removing, persist, definition = _extract_options(args)
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
     chosen_harnesses = args
 
-    config = load_config(config_path)
+    overrides = None
+    if definition:
+        if persona is None:
+            sys.exit("Error: a persona name is required when defining one on the "
+                     f"command line.\n\n{USAGE}")
+        overrides = {"personas": {persona: definition}}
+    if persist:
+        if not definition:
+            sys.exit(f"Error: --persist needs a definition to record.\n\n{USAGE}")
+        if config_path is None:
+            sys.exit("Error: --persist needs the agents.yaml to record the persona "
+                     f"in; name one before the persona.\n\n{USAGE}")
+
+    config = load_config(config_path, overrides=overrides)
     personas = config.get("personas") or {}
+
+    # A persona set up from flags alone exists in the store but in no config, so
+    # removing it by name would not find it. Everything removal needs -- the
+    # wrapper markers and the directories -- derives from the id, so rebuild it
+    # from the defaults once the store confirms it is really there. Setup does
+    # *not* get this treatment: there, an unknown name is a typo, not a target.
+    if removing and persona is not None and persona not in personas:
+        if (_path(config.get("persona_store") or ".") / persona).is_dir():
+            config = load_config(config_path,
+                                 overrides={"personas": {persona: {}}})
+            personas = config.get("personas") or {}
 
     if persona is not None:
         if persona not in personas:
@@ -646,6 +802,10 @@ def main(argv=None):
         if removing and set(selected) >= set(available):
             if _confirm(f"Also remove {pid}'s stored API token?"):
                 remove_persona_store(pid, config)
+
+    # Recorded only once the setup it describes has actually succeeded.
+    if persist and not removing:
+        _persist_definition(config_path, persona, definition)
     return 0
 
 
