@@ -10,14 +10,8 @@ fallback value will be substituted for any absent keys in the configuration.
 
 Two conventions apply throughout:
 
-- **`None` means "unset".** Any setting may be given the value `None` to clear it. For a persona
-  or harness entry, this switches that entry off entirely (see `harnesses`, below).
-- **Unset values are not emitted.** Keys whose value is empty or unset are omitted from rendered
-  harness config files, so an unused `mind.model_2` does not become an env. variable set to `""`.
-
-Settings not listed in this manual are reported as warnings and ignored, so a misspelled key is
-visible rather than silent. Persona and harness *names* are yours to choose and are never checked,
-and `config_store` holds free-form harness data that is passed through untouched.
+- **`None` means "unset".** Any setting's value may be cleared by assigning `None`.
+- **Unset values are not emitted.** Keys with empty / unset values are omitted from config files.
 
 ## Primary Elements
 
@@ -25,8 +19,7 @@ Agents are configured via the definitions of three (3) primary elements:
 
 - **Mind**: The `endpoint` and `model` that provide the cognitive function.
 - **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
-- **Harnesses**: Defines how to render the persona into the harness's native config (e.g., via
-  templates and environment variables).
+- **Harnesses**: Settings embodying persona in harness (e.g., via templates, environment variables)
 
 ---
 
@@ -41,17 +34,14 @@ Persona config path (endpoint, harnesses, etc.)
 ### `personas` -> `NestedDict`
 - Required: **Yes**
 
-Mapping of persona name (key) to its settings (value): `{(<persona>: <settings>)*}`. It may instead
-be a single persona name, or a list of names, when the shipped presets need no customization:
+Maps persona names (keys) to settings (values): `{(<persona>: <settings>)*}`. May be reference(s):
 
 ```yaml
 personas: kimi              # one preset
 personas: [kimi, minimax]   # several
 ```
 
-The personas named here are the ones the tool sets up when you don't name one on the command line.
-Every shipped preset is still *loaded* regardless, so an absolute reference such as
-`{{personas.kimi.mind.model}}` resolves from anywhere in the file.
+Such personas, loaded as presents, resolve from templates (e.g., `{{personas.kimi.mind.model}}`).
 
 ---
 
@@ -89,7 +79,7 @@ Persona settings path.
 - Required: **No**
 - Default: `"{{path}}/token"`
 
-Auth token/key path (not sent if empty/unset). A sibling of `path`, not a child of it.
+Auth token/key path (not sent if empty/unset).
 
 ### `mind` -> `NestedDict`
 - Required: **Yes**
@@ -107,13 +97,11 @@ Connection endpoint (e.g., URL).
 
 Primary model to use (not sent if empty/unset).
 
-#### `mind.model_1` ... `mind.model_4` -> `str`
+#### `mind.model_{n}` -> `str`, for n in [1:4]
 - Required: **No**
 - Default: `""`
 
-Alternate models, in descending order of capability (not sent if empty/unset). A harness that
-offers model tiers maps them onto these; the Claude Code harness, for example, fills its
-opus/sonnet/haiku slots from `model_1`, `model_2`, and `model_3`.
+Additional model options for harness configuration; not sent if empty/unset. 
 
 ### `harnesses` -> `NestedDict`
 - Required: **No**
@@ -121,8 +109,7 @@ opus/sonnet/haiku slots from `model_1`, `model_2`, and `model_3`.
 
 Map/Dict: `{(<harness>: <harness settings>)*}`.
 
-Every known harness is configured in addition to those listed here. To switch one off for this
-persona, set it to `None`:
+Known harnesses are pre-configured. To disable for a persona, set it to `None`:
 
 ```yaml
 harnesses:
@@ -152,6 +139,20 @@ personas:
 
 Short-form description of the harness; defaults to string representation of harness root key.
 
+### `agent_desc` -> `str`
+- Required: **No**
+- Default: `"{{pid}}-{{hid}}"`
+
+Display name for the *agent* (persona bound to a harness). Set per harness to label agents:
+
+```yaml
+personas:
+  orion:
+    harnesses:
+      claude:
+        agent_desc: "Orion (chat)"
+```
+
 ### `hid` -> `str`
 - Required: **No**
 - Default: (Set automatically to the harness's root key)
@@ -180,33 +181,25 @@ Store variable for harness config path.
 - Required: **No**
 - Default: `{}`
 
-Extra environment variables exported by the generated shell wrapper: `{(<NAME>: <value>)*}`. This
-is how a harness with no relocatable config directory is configured: set its knobs here and leave
-`config_file` empty, so nothing is written to disk. None of the bundled harnesses need this — all
-three relocate — but it stays the escape hatch for one that cannot. Entries with an empty/unset
-value are not exported.
+Environment variables exported by shell wrapper in form `{(<NAME>: <value>)*}`
 
 ### `config_file` -> `str`
 - Required: **No**
 - Default: `""`
 
-Main harness config file to write. Nothing is written if this or `content` is empty/unset.
+Main harness config file to write; no-op if this or `content` is empty/unset.
 
 ### `config_store` -> `NestedDict`
 - Required: **No**
 - Default: `{}`
 
-Store of config data, typically used to populate the `content` value. Nested maps are meaningful:
-they become nested JSON objects, nested YAML blocks, or TOML tables (`{a: {b: {...}}}` renders as
-`[a.b]`).
+Config data store used for `content` value. Nested maps become nested JSON, YAML, or TOML objects.
 
 ### `content` -> `str`
 - Required: **No**
 - Default: `""`
 
-Content for main harness config (known harnesses have individual default values). Usually built
-by serializing `config_store` with one of the terminal template calls below, which drop any
-empty/unset entries as they render:
+Content for harness config; often built from `config_store` via transformation calls:
 
 | Call | Renders as |
 |------|-----------|
@@ -246,7 +239,6 @@ List of header lines; may be omitted. `content-type: application/json` is always
 
 #### `verify.body` -> `str`
 - Required: **No**
-- Default: `""` (a minimal `"ping"` completion request using `mind.model`)
+- Default: `""` (minimal `"ping"` completion request using `mind.model`)
 
-Request body for the verification call. Supply this only if the endpoint rejects the standard
-single-message probe.
+Body for verification call; only used if endpoint rejects standard single-message probe.

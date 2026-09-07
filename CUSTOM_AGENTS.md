@@ -126,9 +126,9 @@ personas:
         content: "{{config_store.__AS_TOML__()}}"
 ```
 
-**By environment.** Some harnesses cannot be pointed at a per-persona config directory. Leave
-`config_file` unset and use `wrapper_env` instead; those variables are exported by the generated
-shell wrapper, and no config file is written:
+**By environment.** Some harnesses cannot be pointed at a per-persona config directory. Use
+`wrapper_env` instead; those variables are exported by the generated shell wrapper, and no config
+file is written. This is how the bundled Goose harness works:
 
 ```
 personas:
@@ -144,12 +144,6 @@ personas:
           APEX_MODEL: "{{mind.model}}"
           APEX_HOST: "{{base_uri}}"
 ```
-
-All three bundled harnesses relocate, so none of them need this: Claude Code takes
-`CLAUDE_CONFIG_DIR`, the Codex CLI takes `CODEX_HOME`, and Goose takes `GOOSE_PATH_ROOT`. The last
-of those re-roots goose's entire tree, so its config lands at `$GOOSE_PATH_ROOT/config/config.yaml`
-— note the extra `config` segment — with its data and state alongside. The path must be absolute or
-goose ignores it silently and falls back to the shared `~/.config/goose`.
 
 Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key
 is visible rather than silent. Persona and harness _names_ are yours to choose and are never
