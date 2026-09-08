@@ -28,6 +28,12 @@ All notable changes to this project are documented here. The format follows
   editable template — so `pg --export mine.yaml kimi` dumps kimi's own settings as a starting
   point. The file is edited as text, leaving comments and formatting intact, and a persona it
   already defines is left as written.
+- `--token FILE` reads the API key out of `FILE` instead of prompting for it, so a setup can run
+  unattended. The key is verified and stored exactly as a typed one, and `FILE` itself is only
+  read. Naming it is an instruction to set the token, so an existing one is replaced without
+  asking and a re-run is idempotent. Refused where it would contradict something rather than
+  resolved: alongside `--no-token`, with `--export` or `--remove`, and against a persona
+  configured to store no token.
 - `--interactive` / `-i` asks for a persona's settings instead of taking them as the flags above,
   then offers to save the result — so an agent can be set up with neither a config file nor a
   command to look up. Not a mode of its own: it supplies only what was not already given, and so

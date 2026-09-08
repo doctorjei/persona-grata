@@ -135,21 +135,24 @@ Export, update, and new persona creation are mutually exclusive:
 |`--update`| No | Yes | Yes | Yes | Yes |
 |`--create`| Yes | No | Yes | Yes | Yes |
 
+The API key/token can be read, verified, then stored directly, replacing any existing key/token:
+
+`pg --token ~/keys/moonshot.key kimi claude`
+
+_Sets kimi up with Claude Code, taking the key from `~/keys/moonshot.key`._
+
 The same settings can also be asked for rather than typed:
 
 `pg -i`
 
 _Asks for a name, description, endpoint, model, key, and harnesses, then offers to save the result._
 
-Interactive mode is not a mode of its own; it supplies whatever the flags did not, and so combines
-with the three above — `pg -i --update kimi` asks only what is missing, and
-`pg -i --export mine.yaml` asks, then exports. It cannot be paired with `--remove`, which needs
-only a name.
+Interactive mode supplies whatever flags did not, combining one of the actions above; e.g.,
+`pg -i --update kimi` only asks for missing elements. It cannot be paired with `--remove`.
 
 ### Remove an Agent
 
-Pass `--remove` (or `-r`) to undo a setup — the shell wrapper and the harness's
-config directory are removed:
+Pass `--remove` (or `-r`) to remove the harness-persona wrapper & harness config directory:
 
 `pg --remove kimi codex`
 
@@ -175,13 +178,16 @@ and sourcing your config (`source ~/.bashrc`) or opening a new terminal, you can
 | `--endpoint URL` | Set `mind.endpoint` to `URL` |
 | `--model NAME` | Set `mind.model` to `NAME` |
 | `--desc TEXT` | Set `persona_desc` to `TEXT` |
-| `--no-token` | `token` — no key prompt or verification* |
+| `--no-token` | `token` — no key prompt or verification*^ |
 | `--create` | Stores a new persona; fails if name is taken |
 | `--update` | Replace an existing persona, if it exists |
 | `--export FILE` | Export a template for this configuration to file named `FILE` |
 | `-i`, `--interactive` | Ask for whatever is not given above; offers to save the result |
+| `--token FILE` | Read the API key from `FILE` rather than prompting for it^ |
 
 _*If the `--no-token` flag is not included, connections to keyless-only servers will fail._
+
+_^`--token` and `--no-token` are mutually exclusive._
 
 ## Agent Configuration & Templates
 

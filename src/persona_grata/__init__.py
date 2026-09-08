@@ -58,6 +58,10 @@ persona too to act on every persona in the configuration.
                  Ask for a persona's settings rather than taking them as the
                  flags below, then offer to save the result. Anything already
                  given on the command line is not asked about again.
+  --token FILE   Read the API key from FILE instead of prompting for it, for
+                 unattended setup. The key is verified and stored exactly as a
+                 typed one would be; FILE itself is only read. Contradicts
+                 --no-token, which says there is no key at all.
   -h, --help     Show this message.
 
 Defining a persona on the command line, instead of writing an agents.yaml.
@@ -95,6 +99,9 @@ needs comes from the persona store.
   # The same settings, asked for rather than typed:
   persona-grata -i
 
+  # Unattended, with the key already on disk:
+  persona-grata --token ~/keys/moonshot.key kimi claude
+
 `pg` is a shorter alias for `persona-grata`."""
 
 # Command-line flags that define a persona, mapped to their path in the schema.
@@ -103,6 +110,9 @@ _VALUE_FLAGS = {
     "--model": ("mind", "model"),
     "--desc": ("persona_desc",),
 }
+
+# Flags that take a filename and act on it, rather than defining a persona.
+_FILE_FLAGS = ("--export", "--token")
 
 
 def deep_merge(source, destination):
@@ -366,6 +376,22 @@ def _prompt_key(persona_desc):
         print("Nothing entered — try again.", file=sys.stderr)
 
 
+def _read_key(path):
+    """The API key held in a file, for supplying one without a prompt.
+
+    Stripped, because a key file conventionally ends in a newline and a trailing
+    one would otherwise be copied verbatim into the token store. Read up front
+    so that an unusable file fails before any setup has begun.
+    """
+    try:
+        key = _path(path).read_text().strip()
+    except OSError as error:
+        sys.exit(f"Error: cannot read the key file {path}: {error.strerror}.")
+    if not key:
+        sys.exit(f"Error: the key file {path} is empty.")
+    return key
+
+
 def _confirm(question, default=False):
     """Yes/No prompt. Blank input or EOF returns ``default``."""
     suffix = " [Y/n]: " if default else " [y/N]: "
@@ -465,7 +491,8 @@ def _write_private(path, text):
 # --------------------------------------------------------------------------- #
 # Setup
 # --------------------------------------------------------------------------- #
-def setup_harness(persona_id, harness_id, config):
+def setup_harness(persona_id, harness_id, config, key=None):
+    """Wire up one agent. ``key`` supplies the API key in place of a prompt."""
     personas = _require(config, "personas", "section")
     persona = _require(personas, persona_id, "persona")
     harnesses = _require(persona, "harnesses", "section")
@@ -503,12 +530,18 @@ def setup_harness(persona_id, harness_id, config):
     # 1. Token: keep an existing one on request, else prompt + verify + write.
     #    Verification runs before anything is written, so a bad key writes nothing.
     #    A persona with no token path talks to an endpoint that needs no key.
+    #    A key from --token skips both prompts: naming a file is already an
+    #    explicit instruction to set the token, so there is nothing to confirm.
     if token_path is None:
+        if key is not None:
+            sys.exit(f"Error: persona '{persona_id}' stores no token, so there is "
+                     "nowhere to put the key from --token.")
         print(" - No token path configured; skipping key setup.")
-    elif token_path.exists() and not _confirm("Replace existing authorization token?"):
+    elif key is None and token_path.exists() and not _confirm(
+            "Replace existing authorization token?"):
         print(f" - Keeping existing token at {token_path}.")
     else:
-        key = _prompt_key(persona_desc)
+        key = _prompt_key(persona_desc) if key is None else key
         _verify_key(verify, model, key)
         _write_private(token_path, key)
 
@@ -717,7 +750,8 @@ def _ask_harnesses(available):
               file=sys.stderr)
 
 
-def _interview(persona, harnesses, definition, export_path, config_path, known, updating):
+def _interview(persona, harnesses, definition, export_path, config_path, known,
+               updating, key_file=None):
     """Ask for a persona definition instead of requiring flags or a config file.
 
     The interview and the defining flags are two front ends to one operation: it
@@ -746,10 +780,13 @@ def _interview(persona, harnesses, definition, export_path, config_path, known, 
         mind["model"] = _ask("Model", current_mind.get("model") or "")
 
     # An existing persona defaults to whatever it already does; a new one is
-    # assumed to need a key, since most endpoints do.
+    # assumed to need a key, since most endpoints do. --token settles it without
+    # asking: a key was supplied, so one is plainly needed.
     if "token" not in definition:
         keyed = current.get("token") is not None if current else True
-        if not _confirm("Does this endpoint need an API key?", default=keyed):
+        wanted = True if key_file else _confirm("Does this endpoint need an API key?",
+                                                default=keyed)
+        if not wanted:
             definition["token"] = None
         elif not keyed:
             # Switched off and being switched back on. Take the location from
@@ -761,11 +798,15 @@ def _interview(persona, harnesses, definition, export_path, config_path, known, 
     if not harnesses and not export_path:
         harnesses = _ask_harnesses(list(current.get("harnesses") or preset_names("harness")))
 
+    if definition.get("token", "") is None:
+        key_row = "not needed"
+    else:
+        key_row = f"read from {key_file}" if key_file else "required"
     rows = [("persona", persona),
             ("description", definition["persona_desc"]),
             ("endpoint", mind["endpoint"]),
             ("model", mind["model"] or "(harness default)"),
-            ("API key", "not needed" if definition.get("token", "") is None else "required")]
+            ("API key", key_row)]
     if not export_path:
         rows.append(("harnesses", ", ".join(harnesses)))
     print()
@@ -801,14 +842,14 @@ def _looks_like_config(arg):
 def _extract_options(args):
     """Split argv into positional arguments and the options that precede them.
 
-    Returns ``(positionals, removing, creating, updating, interactive,
+    Returns ``(positionals, removing, creating, updating, interactive, key_file,
     export_path, definition)``, where *definition* is a persona-shaped mapping of
     whatever the defining flags set -- empty when none were given. Both
     ``--model NAME`` and ``--model=NAME`` are accepted.
     """
     positionals, definition = [], {}
     removing = updating = creating = interactive = False
-    export_path = None
+    key_file = export_path = None
     index = 0
     while index < len(args):
         arg = args[index]
@@ -826,7 +867,7 @@ def _extract_options(args):
             positionals.append(arg)
         else:
             name, joined, inline = arg.partition("=")
-            if name != "--export" and name not in _VALUE_FLAGS:
+            if name not in _FILE_FLAGS and name not in _VALUE_FLAGS:
                 sys.exit(f"Error: unknown option '{name}'.\n\n{USAGE}")
             if joined:
                 value = inline
@@ -837,6 +878,8 @@ def _extract_options(args):
                 value = args[index]
             if name == "--export":
                 export_path = value
+            elif name == "--token":
+                key_file = value
             else:
                 node = definition
                 *branches, leaf = _VALUE_FLAGS[name]
@@ -844,7 +887,8 @@ def _extract_options(args):
                     node = node.setdefault(key, {})
                 node[leaf] = value
         index += 1
-    return positionals, removing, creating, updating, interactive, export_path, definition
+    return (positionals, removing, creating, updating, interactive,
+            key_file, export_path, definition)
 
 
 _PERSONAS_LINE = re.compile(r"^personas:[ \t]*$", re.M)
@@ -946,8 +990,8 @@ def main(argv=None):
         print(USAGE)
         return 0
 
-    args, removing, creating, updating, interactive, export_path, definition = \
-        _extract_options(args)
+    (args, removing, creating, updating, interactive,
+     key_file, export_path, definition) = _extract_options(args)
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
@@ -968,6 +1012,17 @@ def main(argv=None):
     if interactive and removing:
         sys.exit("Error: --interactive defines a persona; --remove needs only a "
                  f"name.\n\n{USAGE}")
+    # `token` is in the definition only when --no-token put it there.
+    if key_file and "token" in definition:
+        sys.exit("Error: --token supplies a key and --no-token says there is "
+                 f"none; use one.\n\n{USAGE}")
+    if key_file and (export_path or removing):
+        sys.exit("Error: --token supplies a key for setup, and neither --export "
+                 f"nor --remove stores one.\n\n{USAGE}")
+
+    # Read up front, so an unusable key file fails before anything is asked or
+    # written rather than partway through a multi-harness run.
+    key = _read_key(key_file) if key_file else None
 
     # Not a mode of its own: the interview fills in the definition the flags
     # would have carried, so everything downstream treats it as one of those.
@@ -978,7 +1033,7 @@ def main(argv=None):
         known = load_config(config_path).get("personas") or {}
         _check_name(persona, known, True, creating, updating)
         interviewed = _interview(persona, chosen_harnesses, definition,
-                                 export_path, config_path, known, updating)
+                                 export_path, config_path, known, updating, key_file)
         if interviewed is None:
             print("Cancelled; nothing was set up.")
             return 0
@@ -1031,7 +1086,10 @@ def main(argv=None):
             if hid not in available:
                 sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
                          f"Available: {', '.join(available) or 'none'}")
-            (remove_harness if removing else setup_harness)(pid, hid, config)
+            if removing:
+                remove_harness(pid, hid, config)
+            else:
+                setup_harness(pid, hid, config, key)
 
         # Once nothing is left wired up, the token is the only thing still on
         # disk -- ask, since deleting it means pasting the key again.

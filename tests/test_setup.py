@@ -577,6 +577,116 @@ def test_export_leaves_an_already_defined_persona_alone(home, capsys):
 
 
 # --------------------------------------------------------------------------- #
+# Supplying the key from a file
+# --------------------------------------------------------------------------- #
+def key_file(home, text="sk-from-a-file\n"):
+    path = home / "moonshot.key"
+    path.write_text(text)
+    return str(path)
+
+
+def test_token_file_is_used_instead_of_prompting(home, monkeypatch):
+    def fail(*a, **kw):
+        raise AssertionError("should not prompt for a key")
+    monkeypatch.setattr(pg, "_prompt_key", fail)
+
+    pg.main(["--token", key_file(home), "kimi", "claude"])
+    stored = home / ".config/personas/kimi/token"
+    # Stripped: a key file conventionally ends in a newline, and the wrapper
+    # would otherwise store one inside the token.
+    assert stored.read_text() == "sk-from-a-file"
+    assert mode(stored) == 0o600
+
+
+def test_token_file_is_verified_like_a_typed_one(home, monkeypatch):
+    seen = []
+    monkeypatch.setattr(pg, "_verify_key",
+                        lambda verify, model, key: seen.append(key))
+    pg.main(["--token", key_file(home), "kimi", "claude"])
+    assert seen == ["sk-from-a-file"]
+
+
+def test_token_file_replaces_an_existing_token_without_asking(home, monkeypatch):
+    # Naming a file is already an explicit instruction to set the token, so the
+    # "replace?" guard would only be an unanswerable prompt in a script.
+    def fail(question, default=False):
+        raise AssertionError(f"should not ask: {question}")
+    store = home / ".config/personas/kimi"
+    store.mkdir(parents=True)
+    (store / "token").write_text("stale-key")
+    monkeypatch.setattr(pg, "_confirm", fail)
+
+    pg.main(["--token", key_file(home), "kimi", "claude"])
+    assert (store / "token").read_text() == "sk-from-a-file"
+
+
+def test_token_file_leaves_the_source_alone(home):
+    pg.main(["--token", key_file(home), "kimi", "claude"])
+    assert (home / "moonshot.key").read_text() == "sk-from-a-file\n"
+
+
+def test_token_file_expands_a_tilde(home):
+    (home / "keys").mkdir()
+    (home / "keys" / "k").write_text("sk-tilde")
+    pg.main(["--token", "~/keys/k", "kimi", "claude"])
+    assert (home / ".config/personas/kimi/token").read_text() == "sk-tilde"
+
+
+@pytest.mark.parametrize("text", ["", "   \n\n"])
+def test_an_empty_key_file_is_rejected(home, text):
+    with pytest.raises(SystemExit):
+        pg.main(["--token", key_file(home, text), "kimi", "claude"])
+
+
+def test_a_missing_key_file_fails_before_anything_is_written(home):
+    with pytest.raises(SystemExit):
+        pg.main(["--token", str(home / "nope.key"), "kimi", "claude"])
+    assert not (home / ".config" / "personas").exists()
+    assert not (home / ".bashrc").exists()
+
+
+def test_token_file_and_no_token_contradict(home):
+    with pytest.raises(SystemExit):
+        pg.main(["--token", key_file(home), "--no-token", "--update", "kimi", "claude"])
+
+
+@pytest.mark.parametrize("flag", ["--remove", "--export"])
+def test_token_file_is_rejected_where_no_key_is_stored(home, flag):
+    args = ["--token", key_file(home), flag]
+    if flag == "--export":
+        args.append(str(home / "out.yaml"))
+    with pytest.raises(SystemExit):
+        pg.main(args + ["kimi", "claude"])
+
+
+def test_a_persona_with_no_token_path_rejects_a_key_file(home):
+    # token: None and --token contradict each other just as --no-token does;
+    # silently discarding the key would be the worst of the three outcomes.
+    path = home / "agents.yaml"
+    path.write_text("personas:\n  lab:\n    token: None\n"
+                    "    mind:\n      endpoint: 'http://localhost:9000/v1'\n")
+    with pytest.raises(SystemExit):
+        pg.main(["--token", key_file(home), str(path), "lab", "claude"])
+
+
+def test_token_file_defines_and_keys_a_persona_in_one_go(home, monkeypatch):
+    monkeypatch.setattr(pg, "_verify_key", lambda verify, model, key: None)
+    pg.main(["--endpoint", "https://api.cybertron.space", "--model", "alpha-3-on",
+             "--token", key_file(home), "orion", "claude"])
+    assert (home / ".config/personas/orion/token").read_text() == "sk-from-a-file"
+    assert (home / ".config/personas/orion/claude/settings.json").exists()
+
+
+def test_token_file_is_not_a_definition(home):
+    # It supplies a key rather than changing a setting, so it must not drag an
+    # existing persona into needing --update.
+    positionals, *_, key, export_path, definition = pg._extract_options(
+        ["--token", "/k", "kimi", "claude"])
+    assert positionals == ["kimi", "claude"]
+    assert (key, export_path, definition) == ("/k", None, {})
+
+
+# --------------------------------------------------------------------------- #
 # Defining a persona interactively
 # --------------------------------------------------------------------------- #
 class Interview:
@@ -749,6 +859,16 @@ def test_interactive_re_asks_an_unknown_harness(home, monkeypatch):
     assert interview.asked.count(HARNESS_QUESTION) == 2
     assert (home / ".config/personas/ollama/goose").is_dir()
     assert not (home / ".config/personas/ollama/claude").exists()
+
+
+def test_interactive_does_not_ask_about_a_key_it_was_handed(home, monkeypatch):
+    # --token settles the question: a key was supplied, so one is plainly needed.
+    interview = Interview(LOCAL_ANSWERS + ["claude"],
+                          {"config file": False}).install(monkeypatch)
+    pg.main(["-i", "--token", key_file(home)])
+
+    assert not [q for q in interview.confirmed if "API key" in q]
+    assert (home / ".config/personas/ollama/token").read_text() == "sk-from-a-file"
 
 
 def test_interactive_is_not_a_removal_front_end(home):
