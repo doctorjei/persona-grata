@@ -28,6 +28,11 @@ All notable changes to this project are documented here. The format follows
   editable template — so `pg --export mine.yaml kimi` dumps kimi's own settings as a starting
   point. The file is edited as text, leaving comments and formatting intact, and a persona it
   already defines is left as written.
+- `--interactive` / `-i` asks for a persona's settings instead of taking them as the flags above,
+  then offers to save the result — so an agent can be set up with neither a config file nor a
+  command to look up. Not a mode of its own: it supplies only what was not already given, and so
+  combines with `--create`, `--update`, and `--export`. A name that is taken or unusable, an
+  unknown harness, or an endpoint with no scheme is re-asked rather than fatal.
 - `--remove <persona>` now works for a persona that exists in the store but in no config file,
   which is what a command-line definition produces. Everything removal needs derives from the
   persona id, so the flags no longer have to be repeated just to undo a setup. An unknown name

@@ -574,3 +574,204 @@ def test_export_leaves_an_already_defined_persona_alone(home, capsys):
 
     assert "nope" not in path.read_text()
     assert "already defined" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Defining a persona interactively
+# --------------------------------------------------------------------------- #
+class Interview:
+    """Scripted answers for the interactive prompts.
+
+    ``replies`` feed ``_ask`` in order, with a blank one taking the offered
+    default just as a real Enter would; ``confirms`` maps a fragment of a yes/no
+    question to its answer, so a test only says what it actually cares about.
+    """
+
+    def __init__(self, replies=(), confirms=None):
+        self.replies = list(replies)
+        self.confirms = confirms or {}
+        self.asked, self.confirmed = [], []
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(pg, "_ask", self._ask)
+        monkeypatch.setattr(pg, "_confirm", self._confirm)
+        return self
+
+    def _ask(self, question, default=None):
+        self.asked.append(question)
+        reply = self.replies.pop(0) if self.replies else ""
+        return default if reply == "" and default is not None else reply
+
+    def _confirm(self, question, default=False):
+        self.confirmed.append(question)
+        for fragment, answer in self.confirms.items():
+            if fragment in question:
+                return answer
+        return default
+
+
+HARNESS_QUESTION = "Harnesses (claude codex goose)"
+LOCAL_ANSWERS = ["ollama", "Local Llama", "http://localhost:11434/v1", "llama3"]
+
+
+def test_interactive_defines_a_persona_from_answers(home, monkeypatch):
+    # The headline case: no config file, no flags, nothing but answers.
+    Interview(LOCAL_ANSWERS + ["claude"],
+              {"API key": False, "config file": False}).install(monkeypatch)
+    pg.main(["-i"])
+
+    settings = json.loads(
+        (home / ".config/personas/ollama/claude/settings.json").read_text())
+    assert settings["model"] == "llama3"
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+    assert "ollama-claude" in (home / ".bashrc").read_text()
+    assert not (home / ".config/personas/ollama/token").exists()   # no key wanted
+
+
+def test_interactive_does_not_re_ask_what_the_flags_gave(home, monkeypatch):
+    # The interview and the flags are two front ends to one definition, so a
+    # value supplied either way is settled and must not be asked about again.
+    interview = Interview(["ollama", "claude"], {"config file": False}).install(monkeypatch)
+    pg.main(["-i", "--endpoint", "http://localhost:11434/v1", "--model", "llama3",
+             "--desc", "Local Llama", "--no-token"])
+
+    assert interview.asked == ["Persona name", HARNESS_QUESTION]
+    assert not [q for q in interview.confirmed if "API key" in q]
+    settings = json.loads(
+        (home / ".config/personas/ollama/claude/settings.json").read_text())
+    assert settings["model"] == "llama3"
+
+
+def test_interactive_update_defaults_to_the_existing_settings(home, monkeypatch):
+    tomllib = pytest.importorskip("tomllib")
+    # Blank answers for the description and endpoint; only the model is changed.
+    Interview(["", "", "swapped"], {"API key": True}).install(monkeypatch)
+    pg.main(["-i", "--update", "kimi", "codex"])
+
+    written = tomllib.loads(
+        (home / ".config/personas/kimi/codex/config.toml").read_text())
+    provider = written["model_providers"]["codex"]
+    assert written["model"] == "swapped"                       # the answer applied
+    assert provider["base_url"] == "https://api.moonshot.ai"   # preset kept
+    assert provider["name"] == "Kimi"                          # ...and the rest
+
+
+def test_interactive_can_switch_a_token_back_on(home, monkeypatch):
+    path = home / "agents.yaml"
+    path.write_text("personas:\n  lab:\n    token: None\n"
+                    "    mind:\n      endpoint: 'http://localhost:9000/v1'\n")
+    Interview(["", "", "mistral"], {"API key": True}).install(monkeypatch)
+    pg.main(["-i", "--update", str(path), "lab", "claude"])
+
+    # Answering "yes" to a persona that had none restores the schema's location
+    # rather than leaving it switched off.
+    assert (home / ".config/personas/lab/token").read_text() == "sk-test-key"
+
+
+def test_declining_the_summary_sets_and_saves_nothing(home, monkeypatch):
+    # The save is offered before the final confirmation, so declining has to
+    # cancel that too -- a definition is only written down once it has been used.
+    out = home / "mine.yaml"
+    Interview(LOCAL_ANSWERS + ["claude", str(out)],
+              {"API key": False, "config file": True, "Set up": False}).install(monkeypatch)
+
+    assert pg.main(["-i"]) == 0
+    assert not out.exists()
+    assert not (home / ".config" / "personas").exists()
+    assert not (home / ".bashrc").exists()
+
+
+def test_interactive_offers_to_save_the_definition(home, monkeypatch):
+    out = home / "mine.yaml"
+    Interview(LOCAL_ANSWERS + ["claude", str(out)],
+              {"API key": False, "config file": True}).install(monkeypatch)
+    pg.main(["-i"])
+
+    saved = pg.load_config(str(out))["personas"]["ollama"]
+    assert saved["mind"]["endpoint"] == "http://localhost:11434/v1"
+    assert saved["mind"]["model"] == "llama3"
+    assert saved["persona_desc"] == "Local Llama"
+    assert saved["token"] is None
+    assert (home / ".config/personas/ollama/claude").is_dir()      # set up as well
+
+
+def test_interactive_export_writes_the_config_and_sets_nothing_up(home, monkeypatch):
+    out = home / "out.yaml"
+    interview = Interview(LOCAL_ANSWERS, {"API key": False}).install(monkeypatch)
+    pg.main(["-i", "--export", str(out)])
+
+    assert pg.load_config(str(out))["personas"]["ollama"]["mind"]["model"] == "llama3"
+    assert HARNESS_QUESTION not in interview.asked      # nothing is being set up
+    assert not [q for q in interview.confirmed if "config file" in q]   # nor re-offered
+    assert not (home / ".config" / "personas").exists()
+    assert not (home / ".bashrc").exists()
+
+
+def test_interactive_rejects_a_taken_name_before_asking_anything(home, monkeypatch):
+    # The mode check comes first, so a doomed run does not conduct an interview
+    # only to throw the answers away.
+    interview = Interview().install(monkeypatch)
+    with pytest.raises(SystemExit):
+        pg.main(["-i", "kimi", "claude"])
+    assert interview.asked == []
+
+
+def test_interactive_re_asks_an_unusable_persona_name(home, monkeypatch):
+    # A name it can still correct is re-asked, not fatal: "my agent" would not
+    # survive as a directory or a shell function, and "kimi" is taken.
+    interview = Interview(["my agent", "kimi"] + LOCAL_ANSWERS + ["claude"],
+                          {"API key": False}).install(monkeypatch)
+    pg.main(["-i"])
+
+    assert interview.asked.count("Persona name") == 3
+    assert (home / ".config/personas/ollama/claude").is_dir()
+
+
+def test_interactive_re_asks_an_endpoint_with_no_scheme(home, monkeypatch):
+    # Verification and every harness issue HTTP against this, so a bare host is
+    # caught here rather than at first use.
+    interview = Interview(["ollama", "Local Llama", "localhost:11434/v1",
+                           "http://localhost:11434/v1", "llama3", "claude"],
+                          {"API key": False}).install(monkeypatch)
+    pg.main(["-i"])
+
+    assert interview.asked.count("API endpoint") == 2
+    settings = json.loads(
+        (home / ".config/personas/ollama/claude/settings.json").read_text())
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+
+
+def test_interactive_re_asks_an_unknown_harness(home, monkeypatch):
+    interview = Interview(LOCAL_ANSWERS + ["gooose", "goose"],
+                          {"API key": False}).install(monkeypatch)
+    pg.main(["-i"])
+
+    assert interview.asked.count(HARNESS_QUESTION) == 2
+    assert (home / ".config/personas/ollama/goose").is_dir()
+    assert not (home / ".config/personas/ollama/claude").exists()
+
+
+def test_interactive_is_not_a_removal_front_end(home):
+    # --remove needs only a name; there is no definition to interview about.
+    with pytest.raises(SystemExit):
+        pg.main(["-i", "--remove", "kimi"])
+
+
+def test_ask_takes_the_default_on_blank(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    assert pg._ask("Model", "llama3") == "llama3"
+    assert pg._ask("Model", "") == ""            # a blank default is still an answer
+
+
+def test_ask_re_asks_when_there_is_no_default(monkeypatch):
+    replies = iter(["", "   ", "ollama"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(replies))
+    assert pg._ask("Persona name") == "ollama"
+
+
+def test_ask_ends_the_interview_on_eof(monkeypatch):
+    def eof(prompt):
+        raise EOFError
+    monkeypatch.setattr("builtins.input", eof)
+    with pytest.raises(SystemExit):
+        pg._ask("Persona name")

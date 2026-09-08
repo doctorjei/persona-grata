@@ -54,6 +54,10 @@ persona too to act on every persona in the configuration.
   -r, --remove   Remove the shell wrapper and config directory instead of
                  installing them. Offers to delete the persona's token once
                  all of its harnesses are gone.
+  -i, --interactive
+                 Ask for a persona's settings rather than taking them as the
+                 flags below, then offer to save the result. Anything already
+                 given on the command line is not asked about again.
   -h, --help     Show this message.
 
 Defining a persona on the command line, instead of writing an agents.yaml.
@@ -87,6 +91,9 @@ needs comes from the persona store.
   # A local model needing no API key:
   persona-grata --endpoint http://localhost:11434/v1 --model llama3 \\
                 --no-token ollama claude
+
+  # The same settings, asked for rather than typed:
+  persona-grata -i
 
 `pg` is a shorter alias for `persona-grata`."""
 
@@ -373,6 +380,26 @@ def _confirm(question, default=False):
     return default
 
 
+def _ask(question, default=None):
+    """Text prompt. Blank input takes ``default``; without one, it re-asks.
+
+    EOF is fatal rather than silently defaulted -- unlike :func:`_confirm`,
+    there is no safe answer to invent for an endpoint or a name.
+    """
+    suffix = f" [{default}]: " if default else ": "
+    while True:
+        try:
+            answer = input(question + suffix).strip()
+        except EOFError:
+            print("\nError: No input received.", file=sys.stderr)
+            sys.exit(1)
+        if answer:
+            return answer
+        if default is not None:
+            return default
+        print("Nothing entered — try again.", file=sys.stderr)
+
+
 def _add_header(req, line, key=None):
     """Split a ``Name: value`` header line and add it; if ``key`` is given the
     line is a key-header prefix and the key is appended (mirrors the shell's
@@ -640,6 +667,125 @@ def remove_persona_store(persona_id, config):
 
 
 # --------------------------------------------------------------------------- #
+# Interactive definition
+# --------------------------------------------------------------------------- #
+def _ask_persona_name(known, updating):
+    """Ask for a persona id, held to the same rule the chosen mode enforces.
+
+    A name that fails is re-asked rather than fatal: the point of the interview
+    is that someone is sitting there able to correct it.
+    """
+    while True:
+        name = _ask("Persona name")
+        if re.search(r"[\s/]", name):
+            print("A persona name becomes a directory and a shell function name, "
+                  "so it cannot contain spaces or '/'.", file=sys.stderr)
+        elif updating and name not in known:
+            print(f"No persona named '{name}'. Known: "
+                  f"{', '.join(sorted(known)) or 'none'}.", file=sys.stderr)
+        elif not updating and name in known:
+            print(f"'{name}' already exists; --update changes an existing persona.",
+                  file=sys.stderr)
+        else:
+            return name
+
+
+def _ask_endpoint(default):
+    """Ask for the endpoint, insisting on a scheme urllib can actually fetch.
+
+    Everything downstream -- key verification and the harnesses themselves --
+    issues HTTP against this, so a bare host is a mistake worth catching while
+    it can still be retyped rather than at first use.
+    """
+    while True:
+        answer = _ask("API endpoint", default)
+        if answer.startswith(("http://", "https://")):
+            return answer
+        print("An endpoint needs a scheme, e.g. https://api.example.com or "
+              "http://localhost:11434/v1.", file=sys.stderr)
+
+
+def _ask_harnesses(available):
+    """Ask which harnesses to wire up; blank takes all of them."""
+    listed = " ".join(available)
+    while True:
+        chosen = _ask(f"Harnesses ({listed})", listed).replace(",", " ").split()
+        unknown = [hid for hid in chosen if hid not in available]
+        if not unknown:
+            return chosen
+        print(f"Not available: {', '.join(unknown)}. Choose from: {listed}.",
+              file=sys.stderr)
+
+
+def _interview(persona, harnesses, definition, export_path, config_path, known, updating):
+    """Ask for a persona definition instead of requiring flags or a config file.
+
+    The interview and the defining flags are two front ends to one operation: it
+    collects exactly what ``--endpoint`` / ``--model`` / ``--desc`` /
+    ``--no-token`` carry, does not ask about anything already given on the
+    command line, and hands back an ordinary definition for :func:`load_config`.
+
+    Returns ``(persona, definition, harnesses, save_path)``, or ``None`` if the
+    summary was declined.
+    """
+    definition = copy.deepcopy(definition)
+    print("\nDefining a persona. Press Enter to accept a [default].\n")
+
+    if persona is None:
+        persona = _ask_persona_name(known, updating)
+    current = known.get(persona) or {}
+    current_mind = current.get("mind") or {}
+
+    if "persona_desc" not in definition:
+        definition["persona_desc"] = _ask("Description",
+                                          current.get("persona_desc") or persona)
+    mind = _ensure_dict(definition, "mind")
+    if "endpoint" not in mind:
+        mind["endpoint"] = _ask_endpoint(current_mind.get("endpoint"))
+    if "model" not in mind:
+        mind["model"] = _ask("Model", current_mind.get("model") or "")
+
+    # An existing persona defaults to whatever it already does; a new one is
+    # assumed to need a key, since most endpoints do.
+    if "token" not in definition:
+        keyed = current.get("token") is not None if current else True
+        if not _confirm("Does this endpoint need an API key?", default=keyed):
+            definition["token"] = None
+        elif not keyed:
+            # Switched off and being switched back on. Take the location from
+            # the schema rather than keeping a second copy of it here.
+            schema = load_yaml(DATA_DIR / "persona.default.yaml", ENV_DEFAULTS) or {}
+            definition["token"] = schema.get("token")
+
+    # Export sets nothing up, so in that mode there is no harness to choose.
+    if not harnesses and not export_path:
+        harnesses = _ask_harnesses(list(current.get("harnesses") or preset_names("harness")))
+
+    rows = [("persona", persona),
+            ("description", definition["persona_desc"]),
+            ("endpoint", mind["endpoint"]),
+            ("model", mind["model"] or "(harness default)"),
+            ("API key", "not needed" if definition.get("token", "") is None else "required")]
+    if not export_path:
+        rows.append(("harnesses", ", ".join(harnesses)))
+    print()
+    for label, value in rows:
+        print(f"  {label:<14}{value}")
+    print()
+
+    # A definition is otherwise ephemeral, so offer the same thing --export does.
+    save_path = None
+    if not export_path and _confirm("Save this persona to a config file?"):
+        save_path = _ask("File", config_path or "agents.yaml")
+
+    action = (f"Write '{persona}' to {export_path}?" if export_path else
+              "Set up " + ", ".join(f"{persona}-{hid}" for hid in harnesses) + "?")
+    if not _confirm(action, default=True):
+        return None
+    return persona, definition, harnesses, save_path
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def _looks_like_config(arg):
@@ -655,19 +801,21 @@ def _looks_like_config(arg):
 def _extract_options(args):
     """Split argv into positional arguments and the options that precede them.
 
-    Returns ``(positionals, removing, creating, updating, export_path, definition)``,
-    where *definition* is a persona-shaped mapping of whatever the defining flags
-    set -- empty when none were given. Both ``--model NAME`` and ``--model=NAME``
-    are accepted.
+    Returns ``(positionals, removing, creating, updating, interactive,
+    export_path, definition)``, where *definition* is a persona-shaped mapping of
+    whatever the defining flags set -- empty when none were given. Both
+    ``--model NAME`` and ``--model=NAME`` are accepted.
     """
     positionals, definition = [], {}
-    removing = updating = creating = False
+    removing = updating = creating = interactive = False
     export_path = None
     index = 0
     while index < len(args):
         arg = args[index]
         if arg in ("-r", "--remove"):
             removing = True
+        elif arg in ("-i", "--interactive"):
+            interactive = True
         elif arg == "--update":
             updating = True
         elif arg == "--create":
@@ -696,7 +844,7 @@ def _extract_options(args):
                     node = node.setdefault(key, {})
                 node[leaf] = value
         index += 1
-    return positionals, removing, creating, updating, export_path, definition
+    return positionals, removing, creating, updating, interactive, export_path, definition
 
 
 _PERSONAS_LINE = re.compile(r"^personas:[ \t]*$", re.M)
@@ -777,22 +925,39 @@ def _export_definition(path, persona_id, definition):
     print(f" - Exported persona '{persona_id}' to {path}.")
 
 
+def _check_name(persona, personas, defining, creating, updating):
+    """Hold a persona name to the mode that named it.
+
+    Creating and updating are separate intents, and each says which one it is:
+    --update requires the persona to exist, its absence requires that it does
+    not. Either way a name collision is reported rather than silently resolved.
+    """
+    if updating and persona is not None and persona not in personas:
+        sys.exit(f"Error: persona '{persona}' does not exist; omit --update to "
+                 f"create it.\n\n{USAGE}")
+    if (defining or creating) and persona in personas and not updating:
+        sys.exit(f"Error: persona '{persona}' already exists; pass --update to "
+                 f"change it.\n\n{USAGE}")
+
+
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if any(a in ("-h", "--help") for a in args):
         print(USAGE)
         return 0
 
-    args, removing, creating, updating, export_path, definition = _extract_options(args)
+    args, removing, creating, updating, interactive, export_path, definition = \
+        _extract_options(args)
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
     chosen_harnesses = args
 
-    if definition and persona is None:
+    # The interview supplies both, so under -i their absence is not yet an error.
+    if definition and persona is None and not interactive:
         sys.exit("Error: a persona name is required when defining one on the "
                  f"command line.\n\n{USAGE}")
-    if export_path and persona is None:
+    if export_path and persona is None and not interactive:
         sys.exit(f"Error: --export needs a persona to export.\n\n{USAGE}")
     modes = [name for name, chosen in (("--create", creating), ("--update", updating),
                                        ("--export", export_path is not None),
@@ -800,6 +965,24 @@ def main(argv=None):
     if len(modes) > 1:
         sys.exit(f"Error: {' and '.join(modes)} are separate modes; use one."
                  f"\n\n{USAGE}")
+    if interactive and removing:
+        sys.exit("Error: --interactive defines a persona; --remove needs only a "
+                 f"name.\n\n{USAGE}")
+
+    # Not a mode of its own: the interview fills in the definition the flags
+    # would have carried, so everything downstream treats it as one of those.
+    # It runs ahead of the mode checks so that a name it asks for is held to the
+    # same rule -- and rejected while it can still be retyped.
+    save_path = None
+    if interactive:
+        known = load_config(config_path).get("personas") or {}
+        _check_name(persona, known, True, creating, updating)
+        interviewed = _interview(persona, chosen_harnesses, definition,
+                                 export_path, config_path, known, updating)
+        if interviewed is None:
+            print("Cancelled; nothing was set up.")
+            return 0
+        persona, definition, chosen_harnesses, save_path = interviewed
 
     # --export is the whole operation, not an extra step: it writes the config
     # out and sets nothing up, so none of the guards below apply -- nothing is
@@ -813,16 +996,7 @@ def main(argv=None):
 
     config = load_config(config_path)
     personas = config.get("personas") or {}
-
-    # Creating and updating are separate intents, and each says which one it is:
-    # --update requires the persona to exist, its absence requires that it does
-    # not. Either way a name collision is reported rather than silently resolved.
-    if updating and persona is not None and persona not in personas:
-        sys.exit(f"Error: persona '{persona}' does not exist; omit --update to "
-                 f"create it.\n\n{USAGE}")
-    if (definition or creating) and persona in personas and not updating:
-        sys.exit(f"Error: persona '{persona}' already exists; pass --update to "
-                 f"change it.\n\n{USAGE}")
+    _check_name(persona, personas, definition, creating, updating)
 
     if definition:
         config = load_config(config_path, overrides={"personas": {persona: definition}})
@@ -865,9 +1039,11 @@ def main(argv=None):
             if _confirm(f"Also remove {pid}'s stored API token?"):
                 remove_persona_store(pid, config)
 
-    # Written only once the setup it describes has actually succeeded.
-    if export_path and not removing:
-        _export_definition(export_path, persona,
+    # The interview's offer to keep the definition, written only once the setup
+    # it describes has actually succeeded. (--export never reaches here; it is a
+    # mode of its own and returned above.)
+    if save_path:
+        _export_definition(save_path, persona,
                            _authored_definition(persona, config_path, definition))
     return 0
 
