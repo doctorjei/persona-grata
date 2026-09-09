@@ -48,8 +48,10 @@ Usage:
   persona-grata [options] <persona> [harness ...]
   persona-grata [options] <agents.yaml> [persona] [harness ...]
 
-Omit the harness names to act on every harness known to that persona; omit the
-persona too to act on every persona in the configuration.
+Omit the harness names to act on every harness known to that persona; with a
+configuration file, omit the persona too to act on every persona it declares.
+The shipped presets are a library to choose from, so naming neither a persona
+nor a file is an error rather than a request to install all of them.
 
   -r, --remove   Remove the shell wrapper and config directory instead of
                  installing them. Offers to delete the persona's token once
@@ -93,7 +95,7 @@ Removing an agent set up this way works by name alone: everything --remove
 needs comes from the persona store.
 
   # A local model needing no API key:
-  persona-grata --endpoint http://localhost:11434/v1 --model llama3 \\
+  persona-grata --endpoint http://localhost:11434 --model llama3 \\
                 --no-token ollama claude
 
   # The same settings, asked for rather than typed:
@@ -452,15 +454,17 @@ def _verify_key(verify, model, key):
     url = verify["url"]
     headers = DEFAULT_VERIFY_HEADERS + list(verify.get("headers") or [])
     body = verify.get("body") or DEFAULT_BODY % (model or "")
-    req = urllib.request.Request(url, data=body.encode(), method="POST")
-
-    for line in headers:
-        _add_header(req, line)
-    if verify.get("key_header"):
-        _add_header(req, verify["key_header"], key=key)
 
     print("Verifying key... ", end="", flush=True)
+    # The request is built inside the try: a malformed url raises from
+    # Request() rather than from urlopen(), and an unusable verify url should
+    # degrade like any other failure to reach the endpoint, not traceback.
     try:
+        req = urllib.request.Request(url, data=body.encode(), method="POST")
+        for line in headers:
+            _add_header(req, line)
+        if verify.get("key_header"):
+            _add_header(req, verify["key_header"], key=key)
         with urllib.request.urlopen(req, timeout=VERIFY_TIMEOUT) as resp:
             code = resp.status
     except urllib.error.HTTPError as e:
@@ -502,6 +506,13 @@ def setup_harness(persona_id, harness_id, config, key=None):
     endpoint = (persona.get("mind") or {}).get("endpoint")
     if not endpoint:
         sys.exit(f"Error: persona '{persona_id}' has no 'mind.endpoint' — it is required.")
+    # Everything downstream issues HTTP against this -- key verification, and
+    # the harnesses themselves once installed. A bare host is therefore an
+    # unusable agent, not merely an unverifiable one; say so here rather than
+    # writing a config that cannot work.
+    if not str(endpoint).startswith(("http://", "https://")):
+        sys.exit(f"Error: persona '{persona_id}' has 'mind.endpoint: {endpoint}', which "
+                 "has no scheme — write e.g. http://127.0.0.1:11434.")
     model = (persona.get("mind") or {}).get("model") or ""
 
     home = persona.get("path")
@@ -735,7 +746,7 @@ def _ask_endpoint(default):
         if answer.startswith(("http://", "https://")):
             return answer
         print("An endpoint needs a scheme, e.g. https://api.example.com or "
-              "http://localhost:11434/v1.", file=sys.stderr)
+              "http://localhost:11434.", file=sys.stderr)
 
 
 def _ask_harnesses(available):
@@ -1073,7 +1084,15 @@ def main(argv=None):
             sys.exit(f"Error: unknown persona '{persona}'. "
                      f"Available: {', '.join(sorted(personas)) or 'none'}")
         targets = [persona]
+    elif config_path is None:
+        # Naming neither a persona nor a config file expresses no intent, and
+        # the shipped presets are a library to choose from rather than a set to
+        # install wholesale -- most of them are endpoints the user has no
+        # account on, or local servers they are not running.
+        sys.exit("Error: no persona named, and no configuration file to take one "
+                 f"from. Available: {', '.join(sorted(personas)) or 'none'}")
     else:
+        # A config file *is* an expressed intent: set up everything it declares.
         targets = declared_personas(config_path) or list(personas)
 
     if not targets:

@@ -1,0 +1,6 @@
+# For vLLM, DwarfStar4, TensorRT-LLM, etc.
+local_8000:
+  persona_desc: "LLM Server, Port 8000 (Local)"
+  token: None
+  mind:
+    endpoint: "http://127.0.0.1:8000"

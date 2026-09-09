@@ -1,0 +1,6 @@
+# For LocalAI, HF-TGI, AnythingLLM, Legacy llama.cpp, etc.
+local_8080:
+  persona_desc: "LLM Server, Port 8080 (Local)"
+  token: None
+  mind:
+    endpoint: "http://127.0.0.1:8080"

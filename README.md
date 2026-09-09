@@ -111,7 +111,7 @@ _Setup every persona in the file with all known harnesses._
 
 For one-off variants or local model servers, persona configurations can be defined by arguments:
 
-`pg --endpoint http://localhost:8675/v1 --model llama3 --no-token ollama claude`
+`pg --endpoint http://localhost:8675 --model llama3 --no-token ollama claude`
 
 _Sets up a local Ollama model as the persona "ollama", for Claude Code._
 
@@ -123,7 +123,7 @@ _Sets kimi up with Codex CLI, using a different model just this once._
 
 By default, a definition is ephemeral, but the configuration can be exported if desired:
 
-`pg --endpoint http://who.dr:99/v1 --model llama3 --no-token --export "clauma.yaml" ollama claude`
+`pg --endpoint http://who.dr:99 --model llama3 --no-token --export "clauma.yaml" ollama claude`
 
 _Exports the configuration to `clauma.yaml`._
 

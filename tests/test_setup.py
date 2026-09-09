@@ -162,6 +162,25 @@ def test_missing_endpoint_is_fatal(home):
         pg.setup_harness("bare_p", "claude", cfg)
 
 
+def test_a_schemeless_endpoint_is_fatal(home):
+    # Every harness issues HTTP against the endpoint once installed, so a bare
+    # host is an unusable agent rather than merely an unverifiable one. It also
+    # used to reach urllib as '127.0.0.1/v1/messages' and raise ValueError.
+    cfg = config(home, "personas:\n  bare_p:\n    mind:\n      endpoint: '127.0.0.1'\n")
+    with pytest.raises(SystemExit) as exit_info:
+        pg.setup_harness("bare_p", "claude", cfg)
+    assert "no scheme" in str(exit_info.value)
+    assert not (home / ".bashrc").exists()
+
+
+def test_an_unusable_verify_url_is_not_fatal(capsys):
+    # A hand-written verify url bypasses the endpoint guard, so a malformed one
+    # must degrade like any other unreachable host rather than traceback. No
+    # `home` fixture here: this needs the real _verify_key, not its stub.
+    pg._verify_key({"url": "127.0.0.1/v1/messages"}, "m", "sk-test")
+    assert "unreachable" in capsys.readouterr().err
+
+
 def test_wrapper_env_is_exported(home):
     # A harness with no relocatable config dir is configured entirely through
     # the wrapper's environment.
@@ -312,6 +331,34 @@ def test_cli_remove_offers_the_token_only_when_all_harnesses_go(home, monkeypatc
 
     pg.main(["-r", str(path), "orion"])                 # the rest -> offer
     assert len(token_offers()) == 1
+
+
+def test_bare_invocation_asks_for_a_persona(home):
+    # The shipped presets are a library to choose from: with no config file and
+    # no name there is no intent to act on, and installing every one of them
+    # would wire up endpoints the user has no account on and local servers they
+    # are not running.
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([])
+    assert "no persona named" in str(exit_info.value)
+    assert "kimi" in str(exit_info.value)          # ...but say what is on offer
+    assert not (home / ".bashrc").exists()
+    assert not (home / ".config" / "personas").exists()
+
+
+def test_a_config_file_still_means_all_of_its_personas(home):
+    # A file *is* an expressed intent, so the "set up everything" path stays.
+    path = home / "agents.yaml"
+    path.write_text(BASIC + """\
+  vector:
+    mind:
+      endpoint: "https://api.cybertron.space"
+""")
+    pg.main([str(path)])
+    assert (home / ".config/personas/orion/claude").is_dir()
+    assert (home / ".config/personas/vector/claude").is_dir()
+    # ...and only those: the shipped presets are not dragged in with them.
+    assert not (home / ".config/personas/kimi").exists()
 
 
 def test_unknown_option_is_rejected(home):
