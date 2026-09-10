@@ -524,3 +524,30 @@ def test_function_arguments_may_be_dotted_paths():
         mind: {dialects: {chat: {api_uri: "https://x"}}}
         v: "{{__MATCH_FIRST__(supported, mind.dialects)}}"
     """)["v"] == "chat"
+
+
+def test_a_subscript_defers_until_its_own_key_resolves():
+    # The key is itself a template. Using it verbatim would look up the literal
+    # "{{later}}" and fail, so the reference waits a pass instead (rule 0b).
+    assert _resolve("""
+        v: "{{m[k]}}"
+        m: {x: "found"}
+        k: "{{later}}"
+        later: "x"
+    """)["v"] == "found"
+
+
+def test_a_function_defers_until_its_arguments_resolve():
+    assert _resolve("""
+        v: "{{__MATCH_FIRST__(want, have)}}"
+        want: ["{{late}}"]
+        have: {b: 1}
+        late: "b"
+    """)["v"] == "b"
+
+
+def test_a_subscript_that_is_genuinely_absent_still_fails():
+    # Deferral must not swallow the real error: "not yet" and "not there" are
+    # different answers, and only the first is allowed to wait.
+    with pytest.raises(te.TemplateError):
+        _resolve('v: "{{m[k]}}"\nm: {x: 1}\nk: "nope"\n')

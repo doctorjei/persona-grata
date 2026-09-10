@@ -235,6 +235,22 @@ def _split_on(text, sep, ref):
     return parts
 
 
+def _holds_template(value):
+    """True if ``value`` still contains an unresolved ``{{...}}``, at any depth.
+
+    A reference can resolve to something that is itself not finished — a key that
+    is a template, or a list whose members are. Using it would bake the literal
+    text in, so the caller defers instead (rule 0b).
+    """
+    if isinstance(value, str):
+        return bool(_TMPL_RE.search(value))
+    if isinstance(value, dict):
+        return any(_holds_template(k) or _holds_template(v) for k, v in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_template(v) for v in value)
+    return False
+
+
 def _match_first(key_set, items, ref):
     """First member of ``key_set`` that appears among ``items``' keys.
 
@@ -265,6 +281,8 @@ def _apply_subscripts(cursor, subscripts, path, root, ref):
     """
     for inner in re.findall(r"\[([^\[\]]*)\]", subscripts):
         key = _resolve_ref(inner.strip(), path, root)
+        if _holds_template(key):
+            raise _Deferred(inner)      # the key itself is not resolved yet (rule 0b)
         node = _get(root, cursor)
         if isinstance(node, list):
             try:
@@ -305,6 +323,8 @@ def _resolve_ref(ref, path, root, allow_container=False):
                 raise TemplateError(f"{name}() must be the whole reference: {ref!r}")
             args = [_resolve_ref(a.strip(), path, root, allow_container=True)
                     for a in _split_on(raw_args, ",", ref)]
+            if any(_holds_template(a) for a in args):
+                raise _Deferred(name)   # an argument is not resolved yet (rule 0b)
             return _FUNCTIONS[name](*args, ref)
 
         if call:
