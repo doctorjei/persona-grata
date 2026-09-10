@@ -451,7 +451,7 @@ def _verify_key(verify, model, key):
               file=sys.stderr)
         return
 
-    url = verify["url"]
+    url = verify["check_uri"]
     headers = DEFAULT_VERIFY_HEADERS + list(verify.get("headers") or [])
     body = verify.get("body") or DEFAULT_BODY % (model or "")
 

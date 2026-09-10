@@ -219,7 +219,7 @@ Base URI for connections.
 
 Auth verification settings.
 
-#### `verify.url` -> `str`
+#### `verify.check_uri` -> `str`
 - Required: **No**
 - Default: `"{{base_uri}}/v1/chat/completions"`
 

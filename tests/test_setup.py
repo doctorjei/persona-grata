@@ -177,7 +177,7 @@ def test_an_unusable_verify_url_is_not_fatal(capsys):
     # A hand-written verify url bypasses the endpoint guard, so a malformed one
     # must degrade like any other unreachable host rather than traceback. No
     # `home` fixture here: this needs the real _verify_key, not its stub.
-    pg._verify_key({"url": "127.0.0.1/v1/messages"}, "m", "sk-test")
+    pg._verify_key({"check_uri": "127.0.0.1/v1/messages"}, "m", "sk-test")
     assert "unreachable" in capsys.readouterr().err
 
 

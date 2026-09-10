@@ -43,7 +43,7 @@ personas:
         harness_desc: "Sneaky Clod"
         base_uri: "{{mind.endpoint}}/anthropic_api"
         verify:
-          url: "{{base_uri}}/verify_me"
+          check_uri: "{{base_uri}}/verify_me"
           # Requires traditional Anthropic-style keys:
           key_header: "x-api-key:"
       codex:

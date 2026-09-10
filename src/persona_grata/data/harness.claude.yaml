@@ -26,7 +26,7 @@ claude:
 
   content: "{{config_store.__AS_JSON__()}}"   # should be { model: "foo", env: {{env_var: value}} }
   verify:
-    url: "{{base_uri}}/v1/messages"
+    check_uri: "{{base_uri}}/v1/messages"
     headers:
       - "anthropic-version: 2023-06-01"
 

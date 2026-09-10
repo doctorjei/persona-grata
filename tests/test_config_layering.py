@@ -68,7 +68,7 @@ def test_persona_preset_harness_override_beats_harness_default(tmp_path):
     cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
     claude = cfg["personas"]["kimi"]["harnesses"]["claude"]
     assert claude["base_uri"] == "https://api.moonshot.ai/anthropic"
-    assert claude["verify"]["url"] == "https://api.moonshot.ai/anthropic/v1/messages"
+    assert claude["verify"]["check_uri"] == "https://api.moonshot.ai/anthropic/v1/messages"
 
 
 def test_user_override_beats_everything(tmp_path):
@@ -205,7 +205,7 @@ def test_valid_config_warns_about_nothing(tmp_path, capsys):
                 harness_desc: "CC"
                 auth_var: "K"
                 base_uri: "https://x.test/anthropic"
-                verify: {url: "https://x.test/v", key_header: "x-api-key:", body: "{}"}
+                verify: {check_uri: "https://x.test/v", key_header: "x-api-key:", body: "{}"}
     """))
     assert "unknown setting" not in capsys.readouterr().err
 

@@ -15,7 +15,7 @@ config_store: {}                                 # Harness config data (stored i
 content: ""                                      # Content of harness config file (default: empty)
 base_uri: "{{mind.endpoint}}"                    # Base URI for remote connections
 verify:                                          # Auth verification settings
-  url: "{{base_uri}}/v1/chat/completions"        # URL for auth verification (default OpenAI std)
+  check_uri: "{{base_uri}}/v1/chat/completions"  # URL for auth verification (default OpenAI std)
   key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
   headers: []                                    # List: [<header text>*]
   body: ""                                       # Probe body (default: minimal "ping" request)
