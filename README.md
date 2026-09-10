@@ -64,7 +64,8 @@ modification.
 Persona-Grata comes with "out of the box" support for the following endpoints and harnesses;
 for each endpoint, a default persona is derived:
 
-_Endpoint Personas_: kimi, minimax, navigator
+_Endpoint Personas_: kimi, local_8000, local_8080, local_lemonade, local_llamacpp, local_lmstudio,
+local_ollama, minimax, navigator
 
 _Coding Harnesses_: claude, codex, goose
 

@@ -18,7 +18,7 @@ All notable changes to this project are documented here. The format follows
   which keeps it out of both that file and the shared system keyring.
 - Define a persona from the command line, with no config file to write: `--endpoint`, `--model`,
   `--desc`, and `--no-token`. Chiefly for pointing an agent at a locally-run model —
-  `pg --endpoint http://localhost:11434/v1 --model llama3 --no-token ollama claude`.
+  `pg --endpoint http://localhost:11434 --model llama3 --no-token ollama claude`.
 - `--create`, `--update`, and `--export FILE` are three mutually exclusive modes, each failing
   rather than guessing: `--create` writes a new persona and fails if the name is taken,
   `--update` changes an existing one and fails if it does not, and `--export` writes the
@@ -57,12 +57,23 @@ All notable changes to this project are documented here. The format follows
 - `verify.body` is declared in the harness schema.
 - Continuous integration: tests on Python 3.9/3.11/3.13, plus a packaging job that verifies the
   preset library ships in the wheel and that both console scripts run.
+- Presets for locally-run inference servers: `local_ollama`, `local_llamacpp`, `local_lmstudio`,
+  `local_lemonade`, and the port-named `local_8000` and `local_8080` for the families that share
+  those ports. Each is keyless, so `pg local_ollama claude` needs no API key and no config file.
 
 ### Changed
 
 - The leading argument is treated as a config file only when named `*.yaml` / `*.yml`. Previously
   any existing file matched, so a stray file could turn `pg kimi` into a request to load a config
   named "kimi".
+- Naming neither a persona nor a configuration file is now an error listing the personas on offer,
+  rather than a request to set up every shipped preset against every harness — which, with the
+  local presets above, would be 27 agents for endpoints most users have no account on and servers
+  they are not running. A configuration file is still an expressed intent, so `pg agents.yaml`
+  continues to mean every persona it declares.
+- An endpoint with no `http://` or `https://` scheme is reported before anything is written.
+  Every harness issues HTTP against that value once installed, so a bare host is an unusable
+  agent rather than merely an unverifiable one.
 
 ### Removed
 
@@ -70,6 +81,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A schemeless endpoint reached `urllib` as e.g. `127.0.0.1/v1/messages` and escaped as an
+  unhandled `ValueError`: key verification built its request outside the block meant to tolerate
+  an unreachable endpoint. A `verify.url` that cannot be parsed now degrades like any other
+  failure to reach the host.
 - The harness example in `CONFIG_REFERENCE.md` used a bare `...` line, which is YAML's
   end-of-document marker, so the block could not be parsed as written.
 - `CUSTOM_AGENTS.md` now covers adding and removing harnesses: the `None` opt-out, rendering a
