@@ -22,7 +22,8 @@ import json
 
 _ENV_RE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 _TMPL_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
-_CALL_RE = re.compile(r"^(__[A-Za-z0-9_]+__)\(\)$")
+_CALL_RE = re.compile(r"^(__[A-Za-z0-9_]+__)\((.*)\)$")
+_SUBSCRIPT_RE = re.compile(r"^([^\[\]]*)((?:\[[^\[\]]*\])*)$")
 
 _RESERVED = ("self", "__PARENT__", "__KEY__")
 
@@ -208,15 +209,86 @@ def _scope_lookup(name, path, root):
     raise _Deferred(name)
 
 
-def _resolve_ref(ref, path, root):
+def _split_on(text, sep, ref):
+    """Split on ``sep``, but only outside ``[]`` subscripts and ``()`` calls.
+
+    A dotted chain may carry either -- ``mind.dialects[protocol].api_uri``, or a
+    call whose arguments are themselves dotted -- so a plain ``str.split`` would
+    cut in the wrong place.
+    """
+    parts, current, depth = [], [], 0
+    for char in text:
+        if char in "[(":
+            depth += 1
+        elif char in "])":
+            depth -= 1
+            if depth < 0:
+                raise TemplateError(f"unbalanced brackets in {ref!r}")
+        if char == sep and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    if depth:
+        raise TemplateError(f"unbalanced brackets in {ref!r}")
+    parts.append("".join(current))
+    return parts
+
+
+def _match_first(key_set, items, ref):
+    """First member of ``key_set`` that appears among ``items``' keys.
+
+    The point of returning the *key* rather than the value is that the caller
+    usually wants both -- the name to record, and ``items[name]`` to use -- and
+    a key composes with a subscript to get the value.
+    """
+    if not isinstance(key_set, (list, tuple)):
+        raise TemplateError(f"__MATCH_FIRST__ needs a list as its first argument: {ref!r}")
+    if not isinstance(items, dict):
+        raise TemplateError(f"__MATCH_FIRST__ needs a mapping as its second argument: {ref!r}")
+    for key in key_set:
+        if key in items:
+            return key
+    raise TemplateError(f"__MATCH_FIRST__: none of {list(key_set)} is offered by "
+                        f"{sorted(items)} in {ref!r}")
+
+
+_FUNCTIONS = {"__MATCH_FIRST__": _match_first}
+
+
+def _apply_subscripts(cursor, subscripts, path, root, ref):
+    """Walk ``cursor`` through ``[...]`` subscripts, each itself a reference.
+
+    The subscript resolves in the scope of the node holding the template, not
+    of the node being indexed -- ``mind.dialects[protocol]`` means "the entry of
+    mind.dialects named by *my* protocol".
+    """
+    for inner in re.findall(r"\[([^\[\]]*)\]", subscripts):
+        key = _resolve_ref(inner.strip(), path, root)
+        node = _get(root, cursor)
+        if isinstance(node, list):
+            try:
+                key = int(key)
+            except (TypeError, ValueError):
+                raise TemplateError(f"list subscript {key!r} is not an index in {ref!r}")
+        elif not isinstance(node, dict) or key not in node:
+            raise TemplateError(f"no entry {key!r} in {'.'.join(map(str, cursor))!r} "
+                                f"for {ref!r}")
+        cursor = cursor + [key]
+    return cursor
+
+
+def _resolve_ref(ref, path, root, allow_container=False):
     """Resolve one ``{{...}}`` reference to a Python value.
 
     ``ref`` is the trimmed inner text (a dotted chain). ``path`` is the address
     of the node whose value holds the template. Reserved identifiers apply to
     the running cursor, or to the current node when unqualified (rule 2b). A
-    trailing ``__AS_XXX__()`` segment serializes the subtree the chain reached.
+    trailing ``__AS_XXX__()`` segment serializes the subtree the chain reached;
+    a leading ``__NAME__(args)`` calls a function on resolved arguments. Any
+    segment may carry ``[...]`` subscripts, resolved as references in turn.
     """
-    segments = ref.split(".")
+    segments = _split_on(ref, ".", ref)
     cursor = None            # None => relative to the current node
     key_result = None        # set once __KEY__ terminates the chain
 
@@ -225,6 +297,16 @@ def _resolve_ref(ref, path, root):
             raise TemplateError(f"'__KEY__' must end a reference: {ref!r}")
 
         call = _CALL_RE.match(seg)
+        if call and call.group(2).strip():
+            name, raw_args = call.group(1), call.group(2)
+            if name not in _FUNCTIONS:
+                raise TemplateError(f"unknown function {name}() in {ref!r}")
+            if i != 0 or len(segments) != 1:
+                raise TemplateError(f"{name}() must be the whole reference: {ref!r}")
+            args = [_resolve_ref(a.strip(), path, root, allow_container=True)
+                    for a in _split_on(raw_args, ",", ref)]
+            return _FUNCTIONS[name](*args, ref)
+
         if call:
             name = call.group(1)
             if name not in _SERIALIZERS:
@@ -234,6 +316,8 @@ def _resolve_ref(ref, path, root):
             if cursor is None:
                 raise TemplateError(f"{name}() needs a target: {ref!r}")
             return _SERIALIZERS[name](_get(root, cursor))
+
+        seg, subscripts = _SUBSCRIPT_RE.match(seg).groups()
 
         if seg == "self":
             if i != 0:
@@ -260,14 +344,20 @@ def _resolve_ref(ref, path, root):
             # Later regular segment -> plain child traversal.
             node = _get(root, cursor)
             if not isinstance(node, dict) or seg not in node:
-                raise TemplateError(f"cannot traverse into {'.'.join(cursor)!r} for {ref!r}")
+                raise TemplateError(f"cannot traverse into "
+                                    f"{'.'.join(map(str, cursor))!r} for {ref!r}")
             cursor = cursor + [seg]
+
+        if subscripts:
+            if key_result is not None or cursor is None:
+                raise TemplateError(f"a subscript needs something to index in {ref!r}")
+            cursor = _apply_subscripts(cursor, subscripts, path, root, ref)
 
     if key_result is not None:
         return key_result
 
     value = _get(root, cursor)
-    if isinstance(value, (dict, list)):
+    if isinstance(value, (dict, list)) and not allow_container:
         raise TemplateError(f"reference {ref!r} resolves to a container, not a scalar")
     return value
 

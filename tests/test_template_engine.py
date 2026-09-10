@@ -429,3 +429,98 @@ def test_serializer_defers_until_subtree_is_resolved():
         late: "value"
     """)
     assert cfg["content"] == '{\n  "a": "value"\n}'
+
+
+# --------------------------------------------------------------------------- #
+# Subscripts and functions
+# --------------------------------------------------------------------------- #
+NEGOTIATION = """
+    mind:
+      endpoint: "https://x"
+      dialects:
+        anthropic: {api_uri: "{{endpoint}}/anthropic"}
+        chat: {api_uri: "{{endpoint}}"}
+        responses: {api_uri: "{{endpoint}}"}
+    harness:
+      supported_dialects: %s
+      protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"
+      base_uri: "{{mind.dialects[protocol].api_uri}}"
+"""
+
+
+def test_match_first_returns_the_first_supported_key_that_is_offered():
+    out = _resolve(NEGOTIATION % '["responses", "chat"]')["harness"]
+    assert out["protocol"] == "responses"
+
+
+def test_match_first_falls_back_in_preference_order():
+    # The list is a preference order, not a set: the second choice wins only
+    # when the first is not on offer.
+    text = NEGOTIATION % '["responses", "chat"]'
+    assert _resolve(text.replace('        responses: {api_uri: "{{endpoint}}"}\n', ""))\
+        ["harness"]["protocol"] == "chat"
+
+
+def test_match_first_raises_when_nothing_matches_and_says_what_was_on_offer():
+    text = NEGOTIATION % '["anthropic"]'
+    text = text.replace('        anthropic: {api_uri: "{{endpoint}}/anthropic"}\n', "")
+    with pytest.raises(te.TemplateError) as err:
+        _resolve(text)
+    assert "anthropic" in str(err.value) and "chat" in str(err.value)
+
+
+def test_a_subscript_indexes_by_another_reference():
+    # The subscript resolves in the scope of the node holding the template, so
+    # this reads "the entry of mind.dialects named by *my* protocol".
+    out = _resolve(NEGOTIATION % '["anthropic"]')["harness"]
+    assert out["base_uri"] == "https://x/anthropic"
+
+
+def test_a_subscript_indexes_a_list_by_position():
+    assert _resolve("""
+        i: 2
+        xs: [a, b, c]
+        v: "{{xs[i]}}"
+    """)["v"] == "c"
+
+
+def test_subscripts_chain():
+    assert _resolve("""
+        a: "x"
+        b: "y"
+        m: {x: {y: "deep"}}
+        v: "{{m[a][b]}}"
+    """)["v"] == "deep"
+
+
+def test_a_missing_subscript_entry_is_an_error():
+    with pytest.raises(te.TemplateError):
+        _resolve("""
+            k: "nope"
+            m: {x: 1}
+            v: "{{m[k]}}"
+        """)
+
+
+def test_unbalanced_brackets_are_rejected():
+    with pytest.raises(te.TemplateError):
+        _resolve('v: "{{m[a}}"\nm: {}\na: "x"\n')
+
+
+def test_unknown_function_raises():
+    with pytest.raises(te.TemplateError):
+        _resolve('a: [k]\nb: {k: 1}\nv: "{{__NOPE__(a, b)}}"\n')
+
+
+def test_a_function_call_cannot_be_extended_with_more_segments():
+    with pytest.raises(te.TemplateError):
+        _resolve('a: [k]\nb: {k: {x: 1}}\nv: "{{__MATCH_FIRST__(a, b).x}}"\n')
+
+
+def test_function_arguments_may_be_dotted_paths():
+    # The split has to respect the parentheses, or "mind.dialects" is cut in two.
+    assert _resolve("""
+        supported: [chat]
+        mind: {dialects: {chat: {api_uri: "https://x"}}}
+        v: "{{__MATCH_FIRST__(supported, mind.dialects)}}"
+    """)["v"] == "chat"
