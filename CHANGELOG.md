@@ -6,10 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Template references may carry `[...]` subscripts, which index by another reference — resolved in
+  the scope of the node holding the template, so `{{mind.dialects[protocol].api_uri}}` reads "the
+  entry named by *my* protocol". Subscripts chain, index mappings by key and lists by position.
+- `__MATCH_FIRST__(key_set, items)` returns the first member of `key_set` that appears among
+  `items`' keys, reading the list as a preference order. Unlike a serializer it is the whole
+  reference rather than the end of one, and its arguments may resolve to containers.
+
 ### Changed
 
 - `verify.url` is now `verify.check_uri`, matching the `*_uri` naming used for the other endpoint
   URLs. A hand-written `agents.yaml` that sets it needs the new name.
+- Only the persona-and-harness pairings actually being acted on are built. Every persona is still
+  assembled, so absolute references such as `{{personas.kimi.mind.model}}` keep resolving; what no
+  longer resolves is a reference *into* another persona's harness settings. Resolution is
+  all-or-nothing, so this is what stops one unusable pairing from breaking unrelated commands.
 
 ## [0.0.2] — 2026-09-10
 

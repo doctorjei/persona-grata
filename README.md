@@ -205,6 +205,12 @@ Persona-Grata supports a dynamic variable resolution system via `{{variable}}` s
   value (e.g., `"{{hid}}":` under `model_providers` yields `[model_providers.codex]`).
 - **Serializers**: a reference may end in `__AS_JSON__()`, `__AS_TOML__()`, or `__AS_YAML__()` to
   render a whole subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
+- **Subscripts**: any segment may be indexed by another reference, resolved where the template is
+  written rather than where it points (e.g., `{{providers[chosen].url}}` is "the entry of
+  `providers` named by *my* `chosen`"). Subscripts chain, and index lists by position.
+- **Functions**: a reference may instead *be* a call, `{{__NAME__(arg, ...)}}`, whose arguments are
+  themselves references. `__MATCH_FIRST__(key_set, items)` yields the first member of `key_set`
+  found among `items`' keys, reading the list as a preference order.
 
 Environment variables (`$FOO`, `${FOO}`) are also substituted, in a single pass, before the file
 is parsed. Write `$$` for a literal dollar sign — `$$HOME` yields the text `$HOME`.
