@@ -140,6 +140,84 @@ def test_every_persona_is_built_so_cross_references_resolve(tmp_path):
     assert cfg["personas"]["borrower"]["mind"]["model"] == cfg["personas"]["kimi"]["mind"]["model"]
 
 
+def test_cross_references_still_resolve_when_targeting(tmp_path):
+    # Personas are always built, whatever the targets -- otherwise an absolute
+    # reference into one that is not a target would stop resolving.
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          borrower:
+            mind:
+              endpoint: "https://api.test.com"
+              model: "{{personas.kimi.mind.model}}"
+    """), targets={"borrower": ["claude"]})
+    assert cfg["personas"]["borrower"]["mind"]["model"] == cfg["personas"]["kimi"]["mind"]["model"]
+    assert list(cfg["personas"]["borrower"]["harnesses"]) == ["claude"]
+    assert cfg["personas"]["kimi"]["harnesses"] == {}          # built, not expanded
+
+
+def test_targets_build_only_what_was_asked_for(tmp_path):
+    every = pg.load_config()
+    one = pg.load_config(targets={"kimi": ["codex"]})
+    nothing = pg.load_config(targets={})
+
+    def crosses(cfg):
+        return sum(len(p.get("harnesses") or {}) for p in cfg["personas"].values())
+
+    assert crosses(every) == len(pg.preset_names("persona")) * len(pg.preset_names("harness"))
+    assert crosses(one) == 1
+    assert crosses(nothing) == 0
+    # ...and the one that was asked for is fully built, not a stub.
+    assert one["personas"]["kimi"]["harnesses"]["codex"]["content"]
+
+
+def test_persona_values_resolve_with_no_harnesses(tmp_path):
+    # The CLI reads names, descriptions and the store path off this layer, so
+    # persona-level templates have to stand up without any harness beneath them.
+    cfg = pg.load_config(targets={})
+    kimi = cfg["personas"]["kimi"]
+    assert kimi["persona_desc"] == "Kimi"
+    assert kimi["path"].endswith("/personas/kimi")
+    assert kimi["token"].endswith("/personas/kimi/token")
+    assert cfg["persona_store"]
+
+
+def test_an_unbuildable_harness_does_not_break_other_personas(tmp_path):
+    # The reason targeting exists. One unresolvable reference aborts the whole
+    # load, so before targets, a pairing that could never work took every other
+    # command down with it.
+    path = write(tmp_path, """
+        personas:
+          broken:
+            mind:
+              endpoint: "https://api.test.com"
+            harnesses:
+              claude:
+                base_uri: "{{mind.no_such_key}}"
+          fine:
+            mind:
+              endpoint: "https://api.test.com"
+    """)
+    with pytest.raises(pg.te.TemplateError):               # still fatal if asked for
+        pg.load_config(path, targets={"broken": ["claude"]})
+
+    cfg = pg.load_config(path, targets={"fine": ["claude"]})    # ...but only then
+    assert cfg["personas"]["fine"]["harnesses"]["claude"]["base_uri"] == "https://api.test.com"
+
+
+def test_harness_names_reports_without_building(tmp_path):
+    assert pg.harness_names("kimi") == pg.preset_names("harness")
+    # A persona's own harness is included, and one it switched off is not.
+    path = write(tmp_path, """
+        personas:
+          custom:
+            mind:
+              endpoint: "https://api.test.com"
+            harnesses:
+              apex: {auth_var: "APEX_KEY"}
+    """)
+    assert "apex" in pg.harness_names("custom", path)
+
+
 def test_missing_config_file_exits():
     with pytest.raises(SystemExit):
         pg.load_config("no-such-file.yaml")

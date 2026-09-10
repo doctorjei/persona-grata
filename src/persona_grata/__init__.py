@@ -258,8 +258,61 @@ def _drop_disabled(config):
     return config
 
 
-def load_config(path=None, env_defaults=None, overrides=None):
-    """Assemble and resolve the full configuration tree.
+def _harness_ids(preset_harnesses, declared, known_harnesses):
+    """The harness ids a persona has, from keys alone -- nothing is resolved.
+
+    Every known harness, plus any the persona preset or the user adds, minus the
+    ones a preset switched off. Shared by :func:`load_config` and
+    :func:`harness_names` so the structural view and the built tree cannot drift.
+    """
+    ids = dict.fromkeys(list(known_harnesses) + list(preset_harnesses) + list(declared or {}))
+    return [hid for hid in ids
+            if not (hid in preset_harnesses and preset_harnesses[hid] is None)]
+
+
+def harness_names(pid, path=None, env_defaults=None, overrides=None):
+    """Which harnesses a persona would be set up with, without building any.
+
+    Lets the CLI validate a harness name and enumerate "all of them" before
+    anything is resolved -- the point being that an unbuildable pairing should
+    be reported as such rather than blowing up template resolution.
+    """
+    if env_defaults is None:
+        env_defaults = ENV_DEFAULTS
+    user_cfg = _normalize_personas(load_yaml(path, env_defaults) or {} if path else {})
+    if overrides:
+        deep_merge(_normalize_personas(copy.deepcopy(overrides)), user_cfg)
+    declared = user_cfg["personas"].get(pid)
+    declared = declared.get("harnesses") if isinstance(declared, dict) else None
+
+    persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
+    preset = _load_preset("persona", pid, env_defaults, persona_default)
+    return _harness_ids(preset.get("harnesses") or {}, declared, preset_names("harness"))
+
+
+def _select_targets(config, targets):
+    """Drop harness subtrees the caller did not ask for.
+
+    Runs *after* the user's config is merged in: a user file may declare
+    harnesses under personas that are not targets, and those blocks would
+    otherwise survive as partial subtrees with no defaults beneath them.
+    """
+    if targets is None:
+        return config
+    for pid, persona in (config.get("personas") or {}).items():
+        if not isinstance(persona, dict) or not isinstance(persona.get("harnesses"), dict):
+            continue
+        if pid not in targets:
+            persona["harnesses"] = {}
+        elif targets[pid] is not None:
+            wanted = set(targets[pid])
+            persona["harnesses"] = {hid: h for hid, h in persona["harnesses"].items()
+                                    if hid in wanted}
+    return config
+
+
+def load_config(path=None, env_defaults=None, overrides=None, targets=None):
+    """Assemble and resolve the configuration tree.
 
     Layered bottom-up, each stage overriding the last -- most specific wins::
 
@@ -271,10 +324,23 @@ def load_config(path=None, env_defaults=None, overrides=None):
     definitions supplied on the command line. It is applied before layering, so
     a persona that exists only in ``overrides`` is built like any other.
 
-    Every persona -- the user's and the shipped presets alike -- is built, so
-    that absolute references such as ``{{personas.orion.mind.model}}`` resolve
-    from anywhere. Choosing *which* personas to actually set up is the caller's
-    job (see :func:`declared_personas`).
+    Every persona is built, the user's and the shipped presets alike, so that
+    absolute references such as ``{{personas.orion.mind.model}}`` resolve from
+    anywhere. ``targets`` narrows how much of each one is *built*:
+
+    ``None``
+        every harness of every persona -- the whole library.
+    ``{}``
+        personas only, no harnesses. Enough to list what exists and to read any
+        persona-level value; this is what the CLI validates names against.
+    ``{pid: [hid, ...]}``
+        those harnesses, for those personas. ``{pid: None}`` means every harness
+        that persona has.
+
+    Narrowing matters beyond the work saved: resolution is all-or-nothing, so a
+    single unresolvable reference anywhere aborts the entire load. Building only
+    what was asked for is what lets a pairing that cannot work fail when someone
+    asks for it, instead of breaking every other command.
     """
     if env_defaults is None:
         env_defaults = ENV_DEFAULTS
@@ -323,16 +389,19 @@ def load_config(path=None, env_defaults=None, overrides=None):
         persona_layer["pid"] = pid
         persona = deep_merge(persona_layer, _ensure_dict(base_personas, pid))
 
-        # Harness expansion: every known harness, plus any this persona adds.
+        # Harness expansion: every known harness, plus any this persona adds --
+        # narrowed to what the caller asked for, so nothing unasked-for is built
+        # and, more to the point, nothing unasked-for has to be resolvable.
         declared = users_personas.get(pid)
         declared = declared.get("harnesses") if isinstance(declared, dict) else None
-        harness_ids = dict.fromkeys(
-            known_harnesses + list(preset_harnesses) + list(declared or {}))
+        harness_ids = _harness_ids(preset_harnesses, declared, known_harnesses)
+        if targets is not None:
+            wanted = targets.get(pid, []) if pid in targets else []
+            if wanted is not None:
+                harness_ids = [hid for hid in harness_ids if hid in wanted]
 
         harness_map = _ensure_dict(persona, "harnesses")
         for hid in harness_ids:
-            if hid in preset_harnesses and preset_harnesses[hid] is None:
-                continue                              # preset switched it off
             harness_layer = copy.deepcopy(harness_default)
             deep_merge(_load_preset("harness", hid, env_defaults, harness_default), harness_layer)
             if isinstance(preset_harnesses.get(hid), dict):
@@ -343,9 +412,10 @@ def load_config(path=None, env_defaults=None, overrides=None):
     # 4. User overrides go on last, so they beat every default and preset.
     deep_merge(user_cfg, base_cfg)
 
-    # 5. Drop anything switched off before resolving -- a disabled harness need
-    #    not hold resolvable templates.
+    # 5. Drop anything switched off, and anything outside the targets, before
+    #    resolving -- neither need hold resolvable templates.
     _drop_disabled(base_cfg)
+    _select_targets(base_cfg, targets)
 
     # 6. Template resolution.
     return te.resolve_tree(base_cfg)
@@ -806,8 +876,11 @@ def _interview(persona, harnesses, definition, export_path, config_path, known,
             definition["token"] = schema.get("token")
 
     # Export sets nothing up, so in that mode there is no harness to choose.
+    # Names come from the structural view, not from `current` -- the interview
+    # reads a config built without harnesses, so a persona's own custom harness
+    # would otherwise be missing from what it offers.
     if not harnesses and not export_path:
-        harnesses = _ask_harnesses(list(current.get("harnesses") or preset_names("harness")))
+        harnesses = _ask_harnesses(harness_names(persona, config_path))
 
     if definition.get("token", "") is None:
         key_row = "not needed"
@@ -1041,7 +1114,7 @@ def main(argv=None):
     # same rule -- and rejected while it can still be retyped.
     save_path = None
     if interactive:
-        known = load_config(config_path).get("personas") or {}
+        known = load_config(config_path, targets={}).get("personas") or {}
         _check_name(persona, known, True, creating, updating)
         interviewed = _interview(persona, chosen_harnesses, definition,
                                  export_path, config_path, known, updating, key_file)
@@ -1060,13 +1133,20 @@ def main(argv=None):
         _export_definition(export_path, persona, authored)
         return 0
 
-    config = load_config(config_path)
-    personas = config.get("personas") or {}
+    # Everything up to the work itself runs against the structural layer --
+    # personas without harnesses. It answers every question the CLI asks (which
+    # personas exist, what each is called, where the store is) and costs nothing
+    # to build, so a harness that could never resolve cannot break a command
+    # aimed somewhere else.
+    overrides = None
+    structure = load_config(config_path, targets={})
+    personas = structure.get("personas") or {}
     _check_name(persona, personas, definition, creating, updating)
 
     if definition:
-        config = load_config(config_path, overrides={"personas": {persona: definition}})
-        personas = config.get("personas") or {}
+        overrides = {"personas": {persona: definition}}
+        structure = load_config(config_path, overrides=overrides, targets={})
+        personas = structure.get("personas") or {}
 
     # A persona set up from flags alone exists in the store but in no config, so
     # removing it by name would not find it. Everything removal needs -- the
@@ -1074,16 +1154,16 @@ def main(argv=None):
     # from the defaults once the store confirms it is really there. Setup does
     # *not* get this treatment: there, an unknown name is a typo, not a target.
     if removing and persona is not None and persona not in personas:
-        if (_path(config.get("persona_store") or ".") / persona).is_dir():
-            config = load_config(config_path,
-                                 overrides={"personas": {persona: {}}})
-            personas = config.get("personas") or {}
+        if (_path(structure.get("persona_store") or ".") / persona).is_dir():
+            overrides = {"personas": {persona: {}}}
+            structure = load_config(config_path, overrides=overrides, targets={})
+            personas = structure.get("personas") or {}
 
     if persona is not None:
         if persona not in personas:
             sys.exit(f"Error: unknown persona '{persona}'. "
                      f"Available: {', '.join(sorted(personas)) or 'none'}")
-        targets = [persona]
+        chosen_personas = [persona]
     elif config_path is None:
         # Naming neither a persona nor a config file expresses no intent, and
         # the shipped presets are a library to choose from rather than a set to
@@ -1093,18 +1173,26 @@ def main(argv=None):
                  f"from. Available: {', '.join(sorted(personas)) or 'none'}")
     else:
         # A config file *is* an expressed intent: set up everything it declares.
-        targets = declared_personas(config_path) or list(personas)
+        chosen_personas = declared_personas(config_path) or list(personas)
 
-    if not targets:
+    if not chosen_personas:
         sys.exit("Error: no personas to set up.\n\n" + USAGE)
 
-    for pid in targets:
-        available = list((personas.get(pid) or {}).get("harnesses") or {})
-        selected = chosen_harnesses or available
-        for hid in selected:
+    # Settle every name against the structure, then build exactly that much.
+    targets, available_by_pid = {}, {}
+    for pid in chosen_personas:
+        available = harness_names(pid, config_path, overrides=overrides)
+        for hid in chosen_harnesses:
             if hid not in available:
                 sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
                          f"Available: {', '.join(available) or 'none'}")
+        targets[pid] = list(chosen_harnesses) or available
+        available_by_pid[pid] = available
+
+    config = load_config(config_path, overrides=overrides, targets=targets)
+
+    for pid, selected in targets.items():
+        for hid in selected:
             if removing:
                 remove_harness(pid, hid, config)
             else:
@@ -1112,7 +1200,7 @@ def main(argv=None):
 
         # Once nothing is left wired up, the token is the only thing still on
         # disk -- ask, since deleting it means pasting the key again.
-        if removing and set(selected) >= set(available):
+        if removing and set(selected) >= set(available_by_pid[pid]):
             if _confirm(f"Also remove {pid}'s stored API token?"):
                 remove_persona_store(pid, config)
 
