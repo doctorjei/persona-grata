@@ -418,6 +418,170 @@ personas:
     assert "cannot be used with persona" in str(exit_info.value)
 
 
+def test_a_designation_names_one_agent(home):
+    # `persona+harness` is an agent's structural identifier, and also its default
+    # name -- so it resolves without a registry, the two halves being right there.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main([str(path), "orion+claude"])
+
+    store = home / ".config" / "personas" / "orion"
+    assert (store / "claude").is_dir()
+    assert not (store / "codex").exists()        # only the one it named
+    # The wrapper is still the shell-safe rendering: a function name cannot
+    # contain '+'.
+    assert "orion-claude() {" in (home / ".bashrc").read_text()
+
+
+def test_a_designation_removes_the_agent_it_names(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main([str(path), "orion"])                # every harness
+    pg.main(["-r", str(path), "orion+codex"])    # one of them
+
+    assert not (home / ".config" / "personas" / "orion" / "codex").exists()
+    rc = (home / ".bashrc").read_text()
+    assert "orion-codex() {" not in rc and "orion-claude() {" in rc
+
+
+def test_a_designation_already_names_its_harness(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([str(path), "orion+claude", "codex"])
+    assert "already names a harness" in str(exit_info.value)
+
+
+@pytest.mark.parametrize("token", ["orion+", "+claude", "a+b+c", "kimi.k3+claude"],
+                         ids=["no-harness", "no-persona", "two-separators", "dotted"])
+def test_a_malformed_designation_says_which_half_is_wrong(home, token):
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([token])
+    message = str(exit_info.value)
+    assert f"designation '{token}'" in message
+    assert "persona name" in message or "harness name" in message
+
+
+# --------------------------------------------------------------------------- #
+# Chosen agent names
+# --------------------------------------------------------------------------- #
+def names_file(home):
+    return home / ".config" / "personas" / "agent_names.yaml"
+
+
+def test_a_name_replaces_the_command_but_not_the_marker(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+claude"])
+
+    rc = (home / ".bashrc").read_text()
+    # The function bears the NAME...
+    assert "scout() {" in rc
+    assert "orion-claude() {" not in rc
+    # ...and the marker the DESIGNATION, which is what makes renaming safe.
+    assert "# >>> persona-grata: orion-claude >>>" in rc
+    assert "scout: orion+claude" in names_file(home).read_text()
+    subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
+
+
+def test_renaming_leaves_exactly_one_wrapper(home):
+    # The reason markers stay keyed on the designation: the old block has to be
+    # found and replaced even though the command it installed has changed.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+claude"])
+    pg.main(["--name", "pathfinder", str(path), "orion+claude"])
+
+    rc = (home / ".bashrc").read_text()
+    assert "pathfinder() {" in rc
+    assert "scout() {" not in rc
+    assert rc.count("# >>> persona-grata: orion-claude >>>") == 1
+    # One name per agent, so the old entry is gone rather than accumulating.
+    assert "scout" not in names_file(home).read_text()
+
+
+def test_a_name_is_accepted_wherever_a_designation_is(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+codex"])
+    pg.main(["-r", str(path), "scout"])
+
+    assert not (home / ".config" / "personas" / "orion" / "codex").exists()
+    assert "scout" not in names_file(home).read_text()          # released
+    assert "scout() {" not in (home / ".bashrc").read_text()
+
+
+def test_setting_up_by_name_keeps_the_name(home):
+    # Re-running setup is not a request to rename.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+claude"])
+    pg.main([str(path), "scout"])
+
+    assert "scout: orion+claude" in names_file(home).read_text()
+    assert "scout() {" in (home / ".bashrc").read_text()
+
+
+def test_a_name_and_a_persona_id_cannot_collide_either_way(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+claude"])
+
+    # A name that is already a persona, refused when it is chosen...
+    with pytest.raises(SystemExit) as chosen:
+        pg.main(["--name", "orion", str(path), "orion+codex"])
+    assert "already a persona" in str(chosen.value)
+
+    # ...and a persona defined under a name that is already taken.
+    with pytest.raises(SystemExit) as defined:
+        pg.main(["--endpoint", "http://x.test", "--no-token", str(path), "scout", "claude"])
+    assert "is the name of the agent" in str(defined.value)
+
+
+def test_a_name_belongs_to_one_agent(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(["--name", "scout", str(path), "orion"])      # every harness
+    assert "names one agent" in str(exit_info.value)
+
+    with pytest.raises(SystemExit) as also:
+        pg.main(["--name", "scout", str(path), "orion+claude", "codex"])
+    assert "already names a harness" in str(also.value)
+
+
+def test_a_name_is_held_to_the_shared_grammar(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(["--name", "my scout", str(path), "orion+claude"])
+    assert "agent name" in str(exit_info.value)
+
+
+def test_name_contradicts_the_modes_that_set_nothing_up(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    for argv in (["--name", "x", "--remove", str(path), "orion+claude"],
+                 ["--name", "x", "--export", str(home / "o.yaml"), "orion"]):
+        with pytest.raises(SystemExit) as exit_info:
+            pg.main(argv)
+        assert "--name names an agent being set up" in str(exit_info.value)
+
+
+def test_an_unreadable_name_registry_is_not_fatal(home, capsys):
+    # It is runtime state beside the persona dirs, so a user can corrupt it.
+    # Losing a chosen name is survivable; refusing to run is not.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    names = names_file(home)
+    names.parent.mkdir(parents=True, exist_ok=True)
+    names.write_text("this: [is not: valid yaml\n")
+
+    pg.main([str(path), "orion+claude"])
+    assert "orion-claude() {" in (home / ".bashrc").read_text()
+    assert "cannot read" in capsys.readouterr().err
+
+
 def test_a_persona_id_cannot_climb_out_of_the_store(home):
     # A persona id becomes a directory, so `..` used to land the harness config
     # in <persona_store>/../claude/ -- outside the store, where --remove would
@@ -535,8 +699,9 @@ def test_inline_and_separated_flag_values_agree(home):
 
 
 def test_export_path_is_taken_by_flag_not_position(home):
-    positionals, *_, export_path, definition = pg._extract_options(
+    positionals, *_, export_path, agent_name, definition = pg._extract_options(
         ["--endpoint", "http://x", "--export", "out.yaml", "p", "claude"])
+    assert agent_name is None
     assert positionals == ["p", "claude"]
     assert export_path == "out.yaml"
     assert definition == {"mind": {"endpoint": "http://x"}}
@@ -804,10 +969,10 @@ def test_token_file_defines_and_keys_a_persona_in_one_go(home, monkeypatch):
 def test_token_file_is_not_a_definition(home):
     # It supplies a key rather than changing a setting, so it must not drag an
     # existing persona into needing --update.
-    positionals, *_, key, export_path, definition = pg._extract_options(
+    positionals, *_, key, export_path, agent_name, definition = pg._extract_options(
         ["--token", "/k", "kimi", "claude"])
     assert positionals == ["kimi", "claude"]
-    assert (key, export_path, definition) == ("/k", None, {})
+    assert (key, export_path, agent_name, definition) == ("/k", None, None, {})
 
 
 # --------------------------------------------------------------------------- #

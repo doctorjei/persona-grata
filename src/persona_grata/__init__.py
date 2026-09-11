@@ -53,6 +53,16 @@ configuration file, omit the persona too to act on every persona it declares.
 The shipped presets are a library to choose from, so naming neither a persona
 nor a file is an error rather than a request to install all of them.
 
+One agent may also be named by its designation, <persona>+<harness>, which
+settles the harness on its own -- `pg kimi+claude` is `pg kimi claude`.
+
+  --name NAME    Call this agent NAME, and install it as the command NAME
+                 instead of <persona>-<harness>. A name is yours to choose and
+                 is how the agent is invoked, so it replaces that command
+                 rather than adding a second one; naming it again renames it.
+                 NAME is then accepted wherever a designation is, so
+                 `pg -r NAME` removes it. Sets up exactly one agent.
+
   -r, --remove   Remove the shell wrapper and config directory instead of
                  installing them. Offers to delete the persona's token once
                  all of its harnesses are gone.
@@ -115,6 +125,10 @@ _VALUE_FLAGS = {
 
 # Flags that take a filename and act on it, rather than defining a persona.
 _FILE_FLAGS = ("--export", "--token")
+
+# Takes a value, but names the *agent* rather than changing a persona setting --
+# so, like --token, it must not drag an existing persona into needing --update.
+_NAME_FLAG = "--name"
 
 # The id grammar, harmonized with kanibako's `agent_ref.parse_agent_ref`
 # (doctorjei/kanibako-cli), which consumes this store at
@@ -747,10 +761,116 @@ def _write_private(path, text):
 
 
 # --------------------------------------------------------------------------- #
+# Agent names
+# --------------------------------------------------------------------------- #
+_NAMES_FILE = "agent_names.yaml"
+
+_NAMES_HEADER = """\
+# Chosen agent names, written by persona-grata. Each entry maps a name to the
+# designation of the agent it invokes:
+#
+#     <name>: <persona>+<harness>
+#
+# An agent's name defaults to its designation and needs no entry here; only a
+# name chosen with --name is recorded. A name REPLACES the default command, so
+# an agent has exactly one way to invoke it and there is at most one entry per
+# agent.
+"""
+
+
+def _names_path(config):
+    """Where the name registry lives: beside the persona directories.
+
+    Deliberately a filename that cannot be mistaken for a persona dir -- the
+    store is read by other tools (kanibako walks ``<root>/<pid>/<hid>/``), so a
+    stray entry that looked like a persona would be someone else's bug.
+    """
+    store = config.get("persona_store")
+    return _path(store) / _NAMES_FILE if store else None
+
+
+def agent_names(config):
+    """Chosen names in the store, as ``{name: (persona, harness)}``.
+
+    Runtime state, not schema: naming an agent does not edit anyone's
+    ``agents.yaml``, which matches "a definition is ephemeral unless exported".
+    Read with a plain parse rather than :func:`load_yaml` -- this is a machine-
+    written file, and a ``$VAR`` in an agent's name should stay text.
+    """
+    path = _names_path(config)
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        print(f"Warning: cannot read {path}; ignoring chosen names.", file=sys.stderr)
+        return {}
+    names = {}
+    for name, designation in (data or {}).items() if isinstance(data, dict) else ():
+        pid, plus, hid = str(designation).partition("+")
+        if plus and pid and hid:
+            names[str(name)] = (pid, hid)
+    return names
+
+
+def _save_agent_names(config, names):
+    path = _names_path(config)
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"{name}: {pid}+{hid}\n"
+                   for name, (pid, hid) in sorted(names.items()))
+    path.write_text(_NAMES_HEADER + ("\n" + body if body else ""))
+
+
+def _name_agent(config, name, persona_id, harness_id):
+    """Record ``name`` as the way to invoke this agent, replacing its old one."""
+    names = {n: pair for n, pair in agent_names(config).items()
+             if pair != (persona_id, harness_id)}
+    names[name] = (persona_id, harness_id)
+    _save_agent_names(config, names)
+
+
+def _forget_agent_name(config, persona_id, harness_id):
+    """Drop this agent's chosen name, if it had one. Returns the name dropped."""
+    names = agent_names(config)
+    dropped = [n for n, pair in names.items() if pair == (persona_id, harness_id)]
+    if dropped:
+        _save_agent_names(config, {n: p for n, p in names.items() if n not in dropped})
+    return dropped[0] if dropped else None
+
+
+def _check_agent_name(name, personas, names, persona_id, harness_id):
+    """Refuse a chosen name that is unusable or already means something else.
+
+    Names and persona ids share one namespace, because either may be written as
+    the single positional. The collision is refused *here*, when the name is
+    chosen and can still be changed, rather than resolved later by a precedence
+    rule that would silently shadow one with the other.
+    """
+    error = _id_error("agent", name)
+    if error:
+        sys.exit(f"Error: {error}.")
+    if name in personas:
+        sys.exit(f"Error: '{name}' is already a persona, and an agent name is typed in the "
+                 f"same place; choose a name no persona has.")
+    taken = names.get(name)
+    if taken and taken != (persona_id, harness_id):
+        sys.exit(f"Error: '{name}' already names the agent {taken[0]}+{taken[1]}; "
+                 f"choose another name.")
+
+
+# --------------------------------------------------------------------------- #
 # Setup
 # --------------------------------------------------------------------------- #
-def setup_harness(persona_id, harness_id, config, key=None):
-    """Wire up one agent. ``key`` supplies the API key in place of a prompt."""
+def setup_harness(persona_id, harness_id, config, key=None, name=None):
+    """Wire up one agent. ``key`` supplies the API key in place of a prompt.
+
+    ``name`` is the chosen name this agent is invoked by; it *replaces* the
+    default ``<persona>-<harness>`` command rather than adding a second handle,
+    so an agent always has exactly one. Absent, any previously chosen name is
+    kept -- re-running setup is not a request to rename.
+    """
     personas = _require(config, "personas", "section")
     persona = _require(personas, persona_id, "persona")
     harnesses = _require(persona, "harnesses", "section")
@@ -831,9 +951,17 @@ def setup_harness(persona_id, harness_id, config, key=None):
     else:
         print(f" - No config file for {harness_desc}; skipping.")
 
-    # 5. Shell wrapper
+    # 5. Name, then the shell wrapper that bears it. Recorded before the wrapper
+    #    is written so the file and the installed command cannot disagree; an
+    #    agent keeps whatever name it already had if none was given now.
+    if name is not None:
+        _name_agent(config, name, persona_id, harness_id)
+    else:
+        name = next((n for n, pair in agent_names(config).items()
+                     if pair == (persona_id, harness_id)), None)
+
     _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
-      config_dir, token_path, path_var, auth_var, wrapper_env, agent_desc)
+      config_dir, token_path, path_var, auth_var, wrapper_env, agent_desc, name)
 
 
 def _rc_file():
@@ -858,9 +986,13 @@ def _strip_wrapper(content, persona_id, harness_id, persona_desc=None, harness_d
 
 
 def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
-      config_dir, token_path, path_var, auth_var, wrapper_env=None, agent_desc=None):
+      config_dir, token_path, path_var, auth_var, wrapper_env=None, agent_desc=None,
+      name=None):
     rc_file = _rc_file()
-    cmd_name = f"{persona_id}-{harness_id}"
+    # The command is the agent's NAME. Absent a chosen one that is the
+    # designation, rendered shell-safe: a function name cannot contain '+', so
+    # `kimi+claude` is installed as `kimi-claude`.
+    cmd_name = name or f"{persona_id}-{harness_id}"
     agent_desc = agent_desc or cmd_name
 
     # Only emit assignments the harness actually uses; an empty name would
@@ -876,12 +1008,18 @@ def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
             assignments.append(f'{name}="{value}"')
     env_lines = "".join(f"  {a} \\\n" for a in assignments)
 
+    # The marker is keyed on the DESIGNATION, the function on the NAME, and the
+    # two must not be conflated. A name is chosen and can change; the
+    # designation is assigned and cannot. Since a name *replaces* the command,
+    # the marker is the only remaining record of which agent a block belongs to
+    # -- key it on the name and renaming an agent strands its old wrapper.
+    marker = f"persona-grata: {persona_id}-{harness_id}"
     wrapper = f"""
-# >>> persona-grata: {cmd_name} >>>
+# >>> {marker} >>>
 {cmd_name}() {{
 {env_lines}  command {harness_id} "$@"
 }}
-# <<< persona-grata: {cmd_name} <<<
+# <<< {marker} <<<
 """
 
     content = rc_file.read_text() if rc_file.exists() else ""
@@ -958,6 +1096,12 @@ def remove_harness(persona_id, harness_id, config):
 
     if harness.get("path"):
         _remove_tree(_path(harness["path"]), "config directory")
+
+    # The wrapper is gone, so the name no longer invokes anything. Leaving it
+    # would also block reusing it for a different agent.
+    forgotten = _forget_agent_name(config, persona_id, harness_id)
+    if forgotten:
+        print(f" - Released the name '{forgotten}'.")
 
 
 def remove_persona_store(persona_id, config):
@@ -1101,6 +1245,33 @@ def _interview(persona, harnesses, definition, export_path, config_path, known,
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
+def _split_designation(token):
+    """Split an agent **designation** into ``(persona, harness)``.
+
+    A designation is an agent's structural identifier, ``persona+harness``
+    (``kimi+claude``) -- assigned rather than chosen, since it is derived from
+    the parts. It is also an agent's *default* name, which is why it can be
+    typed wherever a name can: no registry is needed to resolve one, because the
+    two halves are right there in the token.
+
+    A token with no ``+`` is returned as ``(token, None)`` for the caller to
+    resolve. It may be a persona id or a chosen agent name; those share one
+    namespace, and a chosen name that collides with a persona id is refused when
+    it is chosen, so the caller never has to break a tie.
+
+    Both halves are held to the same grammar as any other id, so
+    ``kimi.k3+claude`` is refused here rather than becoming a directory.
+    """
+    persona, plus, harness = token.partition("+")
+    if not plus:
+        return token, None
+    for kind, part in (("persona", persona), ("harness", harness)):
+        error = _id_error(kind, part)
+        if error:
+            sys.exit(f"Error: in designation '{token}': {error}.\n\n{USAGE}")
+    return persona, harness
+
+
 def _looks_like_config(arg):
     """A leading argument is the config file when it is named like one.
 
@@ -1115,13 +1286,13 @@ def _extract_options(args):
     """Split argv into positional arguments and the options that precede them.
 
     Returns ``(positionals, removing, creating, updating, interactive, key_file,
-    export_path, definition)``, where *definition* is a persona-shaped mapping of
-    whatever the defining flags set -- empty when none were given. Both
-    ``--model NAME`` and ``--model=NAME`` are accepted.
+    export_path, agent_name, definition)``, where *definition* is a
+    persona-shaped mapping of whatever the defining flags set -- empty when none
+    were given. Both ``--model NAME`` and ``--model=NAME`` are accepted.
     """
     positionals, definition = [], {}
     removing = updating = creating = interactive = False
-    key_file = export_path = None
+    key_file = export_path = agent_name = None
     index = 0
     while index < len(args):
         arg = args[index]
@@ -1139,7 +1310,7 @@ def _extract_options(args):
             positionals.append(arg)
         else:
             name, joined, inline = arg.partition("=")
-            if name not in _FILE_FLAGS and name not in _VALUE_FLAGS:
+            if name not in _FILE_FLAGS and name not in _VALUE_FLAGS and name != _NAME_FLAG:
                 sys.exit(f"Error: unknown option '{name}'.\n\n{USAGE}")
             if joined:
                 value = inline
@@ -1152,6 +1323,8 @@ def _extract_options(args):
                 export_path = value
             elif name == "--token":
                 key_file = value
+            elif name == _NAME_FLAG:
+                agent_name = value
             else:
                 node = definition
                 *branches, leaf = _VALUE_FLAGS[name]
@@ -1160,7 +1333,7 @@ def _extract_options(args):
                 node[leaf] = value
         index += 1
     return (positionals, removing, creating, updating, interactive,
-            key_file, export_path, definition)
+            key_file, export_path, agent_name, definition)
 
 
 _PERSONAS_LINE = re.compile(r"^personas:[ \t]*$", re.M)
@@ -1263,11 +1436,22 @@ def main(argv=None):
         return 0
 
     (args, removing, creating, updating, interactive,
-     key_file, export_path, definition) = _extract_options(args)
+     key_file, export_path, agent_name, definition) = _extract_options(args)
 
     config_path = args.pop(0) if args and _looks_like_config(args[0]) else None
     persona = args.pop(0) if args else None
     chosen_harnesses = args
+
+    # A designation names one agent, so it settles the harness too. Everything
+    # downstream is unaware which spelling was typed.
+    if persona is not None:
+        persona, designated = _split_designation(persona)
+        if designated is not None:
+            if chosen_harnesses:
+                sys.exit(f"Error: '{persona}+{designated}' already names a harness; "
+                         f"drop {' and '.join(repr(h) for h in chosen_harnesses)}."
+                         f"\n\n{USAGE}")
+            chosen_harnesses = [designated]
 
     # The interview supplies both, so under -i their absence is not yet an error.
     if definition and persona is None and not interactive:
@@ -1291,6 +1475,10 @@ def main(argv=None):
     if key_file and (export_path or removing):
         sys.exit("Error: --token supplies a key for setup, and neither --export "
                  f"nor --remove stores one.\n\n{USAGE}")
+    # A name belongs to an agent, so there has to be exactly one being set up.
+    if agent_name and (export_path or removing):
+        sys.exit("Error: --name names an agent being set up; --export sets none "
+                 f"up and --remove takes one that is already named.\n\n{USAGE}")
 
     # Read up front, so an unusable key file fails before anything is asked or
     # written rather than partway through a multi-harness run.
@@ -1329,6 +1517,22 @@ def main(argv=None):
     overrides = None
     structure = load_config(config_path, targets={})
     personas = structure.get("personas") or {}
+
+    # The single positional may be a chosen agent name rather than a persona id;
+    # the two share a namespace, and a collision was refused when the name was
+    # chosen, so there is no tie to break here. A name settles the harness, just
+    # as a designation does -- it names one agent.
+    chosen_names = agent_names(structure)
+    if persona in chosen_names:
+        if definition or creating:
+            sys.exit(f"Error: '{persona}' is the name of the agent "
+                     f"{chosen_names[persona][0]}+{chosen_names[persona][1]}, so it cannot "
+                     f"also be a persona; choose another name.\n\n{USAGE}")
+        if chosen_harnesses:
+            sys.exit(f"Error: '{persona}' already names one agent; "
+                     f"drop {' and '.join(repr(h) for h in chosen_harnesses)}.\n\n{USAGE}")
+        persona, chosen_harnesses = chosen_names[persona][0], [chosen_names[persona][1]]
+
     _check_name(persona, personas, definition, creating, updating)
 
     if definition:
@@ -1382,6 +1586,17 @@ def main(argv=None):
 
     config = load_config(config_path, overrides=overrides, targets=targets)
 
+    # A name is one agent's, so the command has to be aimed at exactly one --
+    # and it is checked against the whole store, not just what is being built.
+    if agent_name:
+        built = [(pid, hid) for pid in targets
+                 for hid in ((config.get("personas") or {}).get(pid) or {}).get("harnesses") or {}]
+        if len(built) != 1:
+            sys.exit(f"Error: --name names one agent, but this sets up {len(built)}; "
+                     f"name a persona and a harness, e.g. --name {agent_name} "
+                     f"{chosen_personas[0]}+<harness>.\n\n{USAGE}")
+        _check_agent_name(agent_name, personas, chosen_names, *built[0])
+
     # What was built, rather than what was asked for: an incompatible pairing
     # the caller did not name is reported by load_config and left out here.
     for pid in targets:
@@ -1390,7 +1605,7 @@ def main(argv=None):
             if removing:
                 remove_harness(pid, hid, config)
             else:
-                setup_harness(pid, hid, config, key)
+                setup_harness(pid, hid, config, key, agent_name)
 
         # Once nothing is left wired up, the token is the only thing still on
         # disk -- ask, since deleting it means pasting the key again.

@@ -454,6 +454,13 @@ def test_harness_and_dialect_ids_share_the_rule(tmp_path, block, word):
     assert f"{word} name" in str(exit_info.value)
 
 
+def test_the_name_registry_cannot_be_mistaken_for_a_persona():
+    # It sits beside the <pid>/ directories, and the store is read by other
+    # tools that walk them. A filename that could be a persona id would look
+    # like a persona to them; a dot is what keeps it out of the namespace.
+    assert pg._id_error("persona", pg._NAMES_FILE) is not None
+
+
 @pytest.mark.parametrize("kind", ["persona", "harness", "dialect"])
 def test_every_shipped_preset_id_is_usable(kind):
     # We are the other author of these names; a preset that broke the rule would
