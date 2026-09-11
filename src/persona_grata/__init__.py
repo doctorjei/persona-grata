@@ -116,6 +116,24 @@ _VALUE_FLAGS = {
 # Flags that take a filename and act on it, rather than defining a persona.
 _FILE_FLAGS = ("--export", "--token")
 
+# The id grammar, harmonized with kanibako's `agent_ref.parse_agent_ref`
+# (doctorjei/kanibako-cli), which consumes this store at
+# $XDG_CONFIG_HOME/personas/<pid>/<hid>/ and so shares these names. Letters and
+# digits in ANY language, plus `-` and `_`. One charset, enforced in one place.
+#
+# Two characters matter enough to name. `.` separates the segments of a template
+# reference, is how a preset filename yields its id, and -- since an id becomes a
+# directory -- is what lets `..` climb out of the store. `+` separates the halves
+# of a designation. Both fall out of the rule rather than being special-cased.
+_SAFE_EXTRA = frozenset("-_")
+
+# kanibako: "no real agent may be named default". Here the `<kind>.default.yaml`
+# files *are* the schema, so an id of `default` would name a preset that cannot
+# exist; `preset_names` already skips those files.
+_RESERVED_IDS = frozenset({"default"})
+
+_DOT_HINT = ("; '.' is reserved as a key-path separator and cannot appear in a name")
+
 
 def deep_merge(source, destination):
     """Recursively merge source into destination."""
@@ -247,6 +265,52 @@ def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dia
     for path in warnings:
         print(f"Warning: unknown setting '{path}' — ignored (check spelling).", file=sys.stderr)
     return warnings
+
+
+def _id_error(kind, value):
+    """Why this id is unusable as a name, or ``None`` if it is fine.
+
+    Shared by everything a user gets to name, and by both the fail-fast callers
+    and the interview, so one rule is stated once and the message never drifts.
+    """
+    if not isinstance(value, str) or not value:
+        return f"a {kind} name cannot be empty"
+    if not all(ch.isalnum() or ch in _SAFE_EXTRA for ch in value):
+        return (f"invalid {kind} name '{value}': names may contain only letters and digits "
+                f"(any language), '-', and '_'{_DOT_HINT if '.' in value else ''}")
+    if value in _RESERVED_IDS:
+        return f"invalid {kind} name '{value}': '{value}' is reserved"
+    return None
+
+
+def _check_ids(user_cfg):
+    """Refuse a persona, harness or dialect the user named unusably.
+
+    An id becomes a directory, a shell function name and a key in the resolved
+    tree, so the charset is not cosmetic: before this, `pg --endpoint … .. claude`
+    wrote the harness config to `<persona_store>/../claude/`, outside the store
+    entirely. kanibako dropped `.` from the same grammar on 2026-08-04 for the
+    same reason.
+
+    Only what the *user* wrote is checked; the shipped presets are ours and are
+    covered by a test.
+    """
+    for pid, persona in (user_cfg.get("personas") or {}).items():
+        error = _id_error("persona", pid)
+        if error:
+            sys.exit(f"Error: {error}.")
+        if not isinstance(persona, dict):
+            continue
+        for hid in persona.get("harnesses") or {}:
+            error = _id_error("harness", hid)
+            if error:
+                sys.exit(f"Error: {error}.")
+        mind = persona.get("mind")
+        for did in (mind.get("dialects") or {}) if isinstance(mind, dict) else {}:
+            error = _id_error("dialect", did)
+            if error:
+                sys.exit(f"Error: {error}.")
+    return user_cfg
 
 
 def _drop_disabled(config):
@@ -447,6 +511,9 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     # on top of the file before anything is layered.
     if overrides:
         deep_merge(_normalize_personas(copy.deepcopy(overrides)), user_cfg)
+    # Before anything is layered: an id the user invented becomes a directory and
+    # a shell function name, so it is held to one charset first.
+    _check_ids(user_cfg)
     users_personas = user_cfg["personas"]
 
     # 2. Global defaults.
@@ -912,9 +979,9 @@ def _ask_persona_name(known, updating):
     """
     while True:
         name = _ask("Persona name")
-        if re.search(r"[\s/]", name):
-            print("A persona name becomes a directory and a shell function name, "
-                  "so it cannot contain spaces or '/'.", file=sys.stderr)
+        error = _id_error("persona", name)
+        if error:
+            print(error[0].upper() + error[1:] + ".", file=sys.stderr)
         elif updating and name not in known:
             print(f"No persona named '{name}'. Known: "
                   f"{', '.join(sorted(known)) or 'none'}.", file=sys.stderr)

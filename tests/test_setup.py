@@ -418,6 +418,19 @@ personas:
     assert "cannot be used with persona" in str(exit_info.value)
 
 
+def test_a_persona_id_cannot_climb_out_of_the_store(home):
+    # A persona id becomes a directory, so `..` used to land the harness config
+    # in <persona_store>/../claude/ -- outside the store, where --remove would
+    # then have aimed rmtree. kanibako dropped `.` from the same grammar on
+    # 2026-08-04 for this reason; the charset is now shared.
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(["--endpoint", "http://127.0.0.1:1", "--model", "m", "--no-token",
+                 "..", "claude"])
+    assert "persona name" in str(exit_info.value)
+    assert not (home / ".config" / "claude").exists()
+    assert not (home / ".bashrc").exists()
+
+
 def test_unknown_option_is_rejected(home):
     with pytest.raises(SystemExit):
         pg.main(["--bogus", "kimi"])

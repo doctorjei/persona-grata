@@ -407,6 +407,62 @@ def test_declared_personas(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# The id grammar (shared with kanibako, which consumes this store)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("pid", ["..", "kimi.k3", "a+b", "my persona", "a/b", "default", ""],
+                         ids=["dotdot", "dotted", "plus", "space", "slash", "reserved", "empty"])
+def test_an_unusable_persona_id_is_refused(tmp_path, pid):
+    path = write(tmp_path, "personas:\n  %r:\n    mind: {endpoint: 'https://x.test'}\n" % pid)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets={})
+    assert "persona name" in str(exit_info.value)
+
+
+def test_a_dotted_id_says_why_dots_are_refused(tmp_path):
+    # The mistake users actually make is `kimi.k3`, and "letters and digits" does
+    # not explain why a dot is not one of them. kanibako carries the same hint.
+    path = write(tmp_path, "personas:\n  kimi.k3:\n    mind: {endpoint: 'https://x.test'}\n")
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets={})
+    assert "key-path separator" in str(exit_info.value)
+
+
+def test_ids_may_be_any_language(tmp_path):
+    # The rule is str.isalnum(), not ASCII -- harmonized with kanibako's.
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          läma-3_x:
+            mind: {endpoint: "https://x.test"}
+    """), targets={})
+    assert cfg["personas"]["läma-3_x"]["path"].endswith("/personas/läma-3_x")
+
+
+@pytest.mark.parametrize("block,word", [
+    ("harnesses:\n              bad.name: {supported_dialects: ['chat']}", "harness"),
+    ("mind:\n              endpoint: 'https://x.test'\n"
+     "              dialects:\n                bad.name: {api_uri: 'https://x.test'}", "dialect"),
+])
+def test_harness_and_dialect_ids_share_the_rule(tmp_path, block, word):
+    path = write(tmp_path, """
+        personas:
+          orion:
+            mind: {endpoint: "https://x.test"}
+            %s
+    """ % block)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets={})
+    assert f"{word} name" in str(exit_info.value)
+
+
+@pytest.mark.parametrize("kind", ["persona", "harness", "dialect"])
+def test_every_shipped_preset_id_is_usable(kind):
+    # We are the other author of these names; a preset that broke the rule would
+    # be unreachable from the CLI it ships with.
+    for name in pg.preset_names(kind):
+        assert pg._id_error(kind, name) is None, name
+
+
+# --------------------------------------------------------------------------- #
 # Unknown-key warnings
 # --------------------------------------------------------------------------- #
 def test_misspelled_keys_are_reported_at_every_level(tmp_path, capsys):
