@@ -38,16 +38,18 @@ personas:
     persona_desc: "Pax Toolkit"
     mind:
       endpoint: "https://api.moonbase.space"
+      dialects:
+        anthropic:
+          api_uri: "{{endpoint}}/anthropic_api"
+          verify:
+            check_uri: "{{api_uri}}/verify_me"
+            # Requires traditional Anthropic-style keys:
+            key_header: "x-api-key:"
+        responses:
+          api_uri: "{{endpoint}}/openai_api"
     harnesses:
       claude:
         harness_desc: "Sneaky Clod"
-        base_uri: "{{mind.endpoint}}/anthropic_api"
-        verify:
-          check_uri: "{{base_uri}}/verify_me"
-          # Requires traditional Anthropic-style keys:
-          key_header: "x-api-key:"
-      codex:
-        base_uri: "{{mind.endpoint}}/openai_api"
 ```
 
 ## Resolution of Names & Special Identifiers
@@ -61,7 +63,8 @@ as follows:
 
 ```
 clod:
-  base_uri: "{{mind.endpoint}}/misanthropic"             # Yields "https://api.clod.ai/misanthropic"
+  wrapper_env:
+    CLOD_HOST: "{{mind.endpoint}}/misanthropic"         # Yields "https://api.clod.ai/misanthropic"
 ```
 
 Special identifiers use dunders (double-underscores) and can be used to indirectly reference keys
@@ -69,7 +72,8 @@ and metadata. A key's string representation can be accessed via the `__KEY__` id
 
 ```
 clod:
-  base_uri: "{{mind.endpoint}}/{{clod.__KEY__}}"       # Yields "https://api.clod.ai/clod"
+  wrapper_env:
+    CLOD_HOST: "{{mind.endpoint}}/{{clod.__KEY__}}"     # Yields "https://api.clod.ai/clod"
 ```
 
 To access the direct parent of an element, use the `__PARENT__` identifier:
@@ -115,13 +119,14 @@ personas:
       model: "alpha-3-on"
     harnesses:
       apex:
+        supported_dialects: ["chat"]                     # Wire protocols it speaks, best first
         path_var: "APEX_HOME"                            # Points the harness at its config dir
         config_file: "{{path}}/config.toml"
         config_store:
           model: "{{mind.model}}"
           providers:
             "{{hid}}":                                   # Templated key -> [providers.apex]
-              base_url: "{{base_uri}}"
+              base_url: "{{mind.dialects[protocol].api_uri}}"
               env_key: "{{auth_var}}"
         content: "{{config_store.__AS_TOML__()}}"
 ```
@@ -138,11 +143,12 @@ personas:
       model: "alpha-3-on"
     harnesses:
       apex:
+        supported_dialects: ["chat"]
         auth_var: "APEX_API_KEY"
         wrapper_env:
           APEX_PROVIDER: "openai"
           APEX_MODEL: "{{mind.model}}"
-          APEX_HOST: "{{base_uri}}"
+          APEX_HOST: "{{mind.dialects[protocol].api_uri}}"
 ```
 
 Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key

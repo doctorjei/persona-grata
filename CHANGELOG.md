@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Dialects: the wire protocol an endpoint speaks, declared on both sides and negotiated between
+  them. A persona says **where** it serves each one (`mind.dialects`, seeded from a
+  `dialect.*.yaml` registry and defaulting to the endpoint root); a harness says **which** it can
+  speak, best first (`supported_dialects`). Three ship — `anthropic`, `chat`, and `responses` —
+  and a site can add its own, since dialects are ordinary presets. Placement is now stated once,
+  as a fact about the endpoint: kimi and minimax declare `/anthropic` in one place instead of
+  repeating it under every harness that speaks it.
+- The Codex harness negotiates rather than assuming: it prefers Responses, falls back to Chat, and
+  `wire_api` names whichever it got.
 - Template references may carry `[...]` subscripts, which index by another reference — resolved in
   the scope of the node holding the template, so `{{mind.dialects[protocol].api_uri}}` reads "the
   entry named by *my* protocol". Subscripts chain, index mappings by key and lists by position.
@@ -17,12 +26,30 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** every harness must declare `supported_dialects`. Its URI and its key-verification
+  settings both come from the negotiated dialect, so a harness declaring none has neither. A
+  hand-written harness in an `agents.yaml` needs the new key.
+- **Breaking:** `base_uri` and the harness-level `verify` block are gone. The mount is now
+  `{{mind.dialects[protocol].api_uri}}`, and `verify` belongs to the dialect
+  (`mind.dialects.<name>.verify`) — how to check a key is a property of the protocol, not of the
+  harness that speaks it.
+- Naming no harness (`pg agents.yaml kimi`) sets up the ones the endpoint can actually serve, and
+  names the ones it skips, rather than failing over a single pairing that cannot work. Naming a
+  harness explicitly still fails if that pairing is impossible, and a persona no harness can speak
+  to is an error either way.
 - `verify.url` is now `verify.check_uri`, matching the `*_uri` naming used for the other endpoint
   URLs. A hand-written `agents.yaml` that sets it needs the new name.
 - Only the persona-and-harness pairings actually being acted on are built. Every persona is still
   assembled, so absolute references such as `{{personas.kimi.mind.model}}` keep resolving; what no
   longer resolves is a reference *into* another persona's harness settings. Resolution is
   all-or-nothing, so this is what stops one unusable pairing from breaking unrelated commands.
+
+### Fixed
+
+- The Codex preset verified API keys against `/v1/chat/completions` while telling codex to speak
+  Responses. Against an endpoint serving both, this was invisible; against one serving only Chat,
+  the key check passed and the agent still failed. Each dialect now carries its own verification
+  settings, so the protocol checked is the protocol spoken.
 
 ## [0.0.2] — 2026-09-10
 

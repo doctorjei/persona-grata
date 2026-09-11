@@ -18,14 +18,16 @@ personas:
     persona_desc: "Pax Toolkit"
     mind:
       endpoint: "https://api.moonbase.space"
+      dialects:
+        anthropic:
+          api_uri: "{{endpoint}}/anthropic_api"
+          verify:
+            check_uri: "{{api_uri}}/verify_me"
+            # Requires traditional Anthropic-style keys:
+            key_header: "x-api-key:"
+        responses:
+          api_uri: "{{endpoint}}/openai_api"
     harnesses:
       claude:
         harness_desc: "Sneaky Claude"
         path: "~/my/secret/claude"
-        base_uri: "{{mind.endpoint}}/anthropic_api"
-        verify:
-          url: "{{base_uri}}/verify_me"
-          # Requires traditional Anthropic-style keys:
-          key_header: "x-api-key:"
-      codex:
-        base_uri: "{{mind.endpoint}}/openai_api"

@@ -21,6 +21,8 @@ Agents are configured via the definitions of three (3) primary elements:
 - **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
 - **Harnesses**: Settings embodying persona in harness (e.g., via templates, environment variables)
 
+Additionally, the communication must be in some **dialect**, which follows some **protocol**; the
+dialects determine which **personas** and **harnesses** can be connected / matched.
 ---
 
 ## Top-Level Configuration
@@ -102,6 +104,19 @@ Primary model to use (not sent if empty/unset).
 - Default: `""`
 
 Additional model options for harness configuration; not sent if empty/unset. 
+
+#### `mind.dialects` -> `NestedDict`
+- Required: **No**
+- Default: (Filled in with known dialects, mounted at `mind.endpoint`)
+
+Where the endpoint serves each wire protocol. Set one to `None` if it is not served:
+
+```yaml
+mind:
+  dialects:
+    anthropic: {api_uri: "{{endpoint}}/anthropic"}
+    responses: None
+```
 
 ### `harnesses` -> `NestedDict`
 - Required: **No**
@@ -207,11 +222,47 @@ Content for harness config; often built from `config_store` via transformation c
 | `"{{config_store.__AS_TOML__()}}"` | TOML, nesting maps into tables |
 | `"{{config_store.__AS_YAML__()}}"` | Block-style YAML, keys in declaration order |
 
-### `base_uri` -> `str`
-- Required: **No**
-- Default: `"{{mind.endpoint}}"`
+### `supported_dialects` -> `list[str]`
+- Required: **Yes**
 
-Base URI for connections.
+Wire protocols this harness speaks, best first. No match with the persona, no agent.
+
+### `protocol` -> `str`
+- Required: **No**
+- Default: `"{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"`
+
+The dialect negotiated for this pairing; indexes the persona's entry for it.
+
+---
+
+## Dialect Configuration (Per Persona)
+
+A dialect is a wire protocol (`anthropic`, `chat`, `responses`) mounted under `mind.dialects`. It
+is a family of endpoints, not one URL: `api_uri` is the mount, the rest hang off it.
+
+### `api_uri` -> `str`
+- Required: **No**
+- Default: `"{{endpoint}}"`
+
+Mount for this protocol.
+
+### `msg_uri` -> `str`
+- Required: **No**
+- Default: `"{{api_uri}}/v1/chat/completions"` (`anthropic`: `/v1/messages`; `responses`: `/v1/responses`)
+
+Completion/message operation.
+
+### `model_uri` -> `str`
+- Required: **No**
+- Default: `"{{api_uri}}/v1/models"`
+
+Model listing operation.
+
+### `emb_uri` -> `str`
+- Required: **No**
+- Default: `"{{api_uri}}/v1/embeddings"` (unset for `anthropic`, `responses`)
+
+Embeddings operation.
 
 ### `verify` -> `NestedDict`
 - Required: **No**
@@ -221,7 +272,7 @@ Auth verification settings.
 
 #### `verify.check_uri` -> `str`
 - Required: **No**
-- Default: `"{{base_uri}}/v1/chat/completions"`
+- Default: `"{{msg_uri}}"`
 
 URL for auth verification (default OpenAI std).
 
