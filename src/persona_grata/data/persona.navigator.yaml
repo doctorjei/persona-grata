@@ -6,3 +6,8 @@ navigator:
   mind:
     endpoint: "https://api.ai.it.ufl.edu"
     model: "gemma-4-31b-it"
+
+### No `mind.dialects` here, deliberately. The registry serves all three protocols at the endpoint
+### root, which is right for a single-mount gateway, and narrowing that is the breaking edit --
+### listing (say) `chat` alone would refuse `pg navigator codex`, an agent that may well work. It
+### waits on evidence that a protocol is genuinely unserved.

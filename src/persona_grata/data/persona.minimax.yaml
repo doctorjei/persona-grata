@@ -1,19 +1,28 @@
 ##################################################################################################
 # Minimax Persona Settings
+#
+# Same shape as kimi -- Anthropic on /anthropic, the OpenAI variants at the root. Without the
+# dialect entry ANTHROPIC_BASE_URL silently drops the /anthropic segment and claude points at the
+# wrong protocol's mount.
+#
+# The config_store override below stays where it is: it is a genuine harness setting, not placement.
 
 minimax:
   persona_desc: "Minimax"
   mind:
+    endpoint: "https://api.minimax.io"
+    dialects:
+      anthropic:
+        api_uri: "{{endpoint}}/anthropic"
+
     model: "MiniMax-M3"
     model_1: "MiniMax-M2.7"
     model_2: "MiniMax-M2.7-highspeed"
     model_3: "MiniMax-M2.5"
     model_4: "MiniMax-M2.5-highspeed"
-    endpoint: "https://api.minimax.io"
 
   harnesses:
     claude:
-      base_uri: "{{mind.endpoint}}/anthropic"
       config_store:
         env:
           CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"

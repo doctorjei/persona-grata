@@ -209,13 +209,13 @@ def declared_personas(path, env_defaults=None):
     return list(_normalize_personas(user_cfg)["personas"])
 
 
-def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema):
+def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dialect_schema):
     """Warn about settings keys the schema does not define.
 
     A misspelled key is otherwise silent: it merges into the tree, nothing reads
-    it, and setup quietly uses the default. Persona and harness *names* are the
-    user's to invent, so only their settings are checked, and ``config_store``
-    is free-form harness data that is deliberately not validated.
+    it, and setup quietly uses the default. Persona, harness and dialect *names*
+    are the user's to invent, so only their settings are checked, and
+    ``config_store`` is free-form harness data that is deliberately not validated.
     """
     warnings = []
 
@@ -230,14 +230,19 @@ def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema):
     for pid, persona in (user_cfg.get("personas") or {}).items():
         if not isinstance(persona, dict):
             continue
+        mind = persona.get("mind") if isinstance(persona.get("mind"), dict) else {}
         check(persona, persona_schema, f"personas.{pid}.")
-        check(persona.get("mind"), persona_schema.get("mind") or {}, f"personas.{pid}.mind.")
+        check(mind, persona_schema.get("mind") or {}, f"personas.{pid}.mind.")
+        for did, dialect in (mind.get("dialects") or {}).items():
+            if not isinstance(dialect, dict):
+                continue
+            base = f"personas.{pid}.mind.dialects.{did}."
+            check(dialect, dialect_schema, base)
+            check(dialect.get("verify"), dialect_schema.get("verify") or {}, f"{base}verify.")
         for hid, harness in (persona.get("harnesses") or {}).items():
             if not isinstance(harness, dict):
                 continue
-            base = f"personas.{pid}.harnesses.{hid}."
-            check(harness, harness_schema, base)
-            check(harness.get("verify"), harness_schema.get("verify") or {}, f"{base}verify.")
+            check(harness, harness_schema, f"personas.{pid}.harnesses.{hid}.")
 
     for path in warnings:
         print(f"Warning: unknown setting '{path}' — ignored (check spelling).", file=sys.stderr)
@@ -245,7 +250,7 @@ def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema):
 
 
 def _drop_disabled(config):
-    """Remove personas/harnesses the configuration switched off with ``None``."""
+    """Remove personas/harnesses/dialects the configuration switched off with ``None``."""
     personas = _ensure_dict(config, "personas")
     for pid, persona in list(personas.items()):
         if not isinstance(persona, dict):
@@ -255,19 +260,28 @@ def _drop_disabled(config):
         for hid, harness in list(harnesses.items()):
             if not isinstance(harness, dict):
                 del harnesses[hid]
+        mind = persona.get("mind")
+        # A dialect switched off says the endpoint does not serve that protocol,
+        # so it must be gone before compatibility is settled -- an entry left as
+        # None would still read as "offered".
+        if isinstance(mind, dict) and isinstance(mind.get("dialects"), dict):
+            for did, dialect in list(mind["dialects"].items()):
+                if not isinstance(dialect, dict):
+                    del mind["dialects"][did]
     return config
 
 
-def _harness_ids(preset_harnesses, declared, known_harnesses):
-    """The harness ids a persona has, from keys alone -- nothing is resolved.
+def _expand_ids(preset_entries, declared, known):
+    """The ids a persona has for one kind, from keys alone -- nothing is resolved.
 
-    Every known harness, plus any the persona preset or the user adds, minus the
-    ones a preset switched off. Shared by :func:`load_config` and
-    :func:`harness_names` so the structural view and the built tree cannot drift.
+    Every shipped preset of that kind, plus any the persona preset or the user
+    adds, minus the ones a preset switched off. Used for harnesses (shared by
+    :func:`load_config` and :func:`harness_names`, so the structural view and the
+    built tree cannot drift) and for the dialects seeded into ``mind.dialects``.
     """
-    ids = dict.fromkeys(list(known_harnesses) + list(preset_harnesses) + list(declared or {}))
-    return [hid for hid in ids
-            if not (hid in preset_harnesses and preset_harnesses[hid] is None)]
+    ids = dict.fromkeys(list(known) + list(preset_entries) + list(declared or {}))
+    return [name for name in ids
+            if not (name in preset_entries and preset_entries[name] is None)]
 
 
 def harness_names(pid, path=None, env_defaults=None, overrides=None):
@@ -287,7 +301,7 @@ def harness_names(pid, path=None, env_defaults=None, overrides=None):
 
     persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
     preset = _load_preset("persona", pid, env_defaults, persona_default)
-    return _harness_ids(preset.get("harnesses") or {}, declared, preset_names("harness"))
+    return _expand_ids(preset.get("harnesses") or {}, declared, preset_names("harness"))
 
 
 def _select_targets(config, targets):
@@ -311,6 +325,79 @@ def _select_targets(config, targets):
     return config
 
 
+def _dialects_of(persona):
+    """A persona's ``mind.dialects`` map, whatever shape the config left it in."""
+    mind = persona.get("mind") if isinstance(persona, dict) else None
+    dialects = mind.get("dialects") if isinstance(mind, dict) else None
+    return dialects if isinstance(dialects, dict) else {}
+
+
+def _check_dialects(config, targets=None):
+    """Settle protocol compatibility before resolution, and report it by name.
+
+    A harness's ``supported_dialects`` and the keys of the persona's
+    ``mind.dialects`` are literal strings at this point, so an unbuildable
+    pairing can be refused the way an unknown harness is -- rather than
+    surfacing later as a ``TemplateError`` about ``__MATCH_FIRST__``, which
+    names nothing the user can act on.
+
+    Two different failures, deliberately handled differently:
+
+    * **A harness with no ``supported_dialects`` is malformed**, not
+      incompatible -- it has no URI and nothing to verify against whoever it is
+      paired with. Always fatal.
+    * **No overlap is a fact about the pairing.** It is fatal only when the
+      caller named that cross (``targets[pid]`` is a list). Otherwise the ask
+      was "whatever this persona has", and an unusable pairing is dropped with
+      a note so that the usable ones still get set up. A persona left with
+      nothing at all is fatal again -- there is no work to do.
+
+    Only the harnesses still in the tree are checked, so a pairing that cannot
+    work fails when someone asks for it and not before (see ``targets``).
+    """
+    for pid, persona in (config.get("personas") or {}).items():
+        if not isinstance(persona, dict):
+            continue
+        harnesses = persona.get("harnesses")
+        if not isinstance(harnesses, dict) or not harnesses:
+            continue
+        offered = _dialects_of(persona)
+        serves = ", ".join(sorted(offered)) or "no protocol"
+        named = targets is not None and isinstance(targets.get(pid), list)
+        refused = {}
+
+        for hid, harness in list(harnesses.items()):
+            if not isinstance(harness, dict):
+                continue
+            supported = harness.get("supported_dialects")
+            if not supported or not isinstance(supported, list):
+                sys.exit(f"Error: harness '{hid}' declares no 'supported_dialects', so there "
+                         f"is no protocol for it to speak to persona '{pid}' with. List the "
+                         f"wire protocols it can speak, best first; '{pid}' serves {serves}.")
+            # Either side may be templated -- exotic, but legal. Nothing can be
+            # compared until the tree resolves, so leave those to __MATCH_FIRST__
+            # rather than guessing at a mismatch.
+            if te._holds_template(supported) or te._holds_template(list(offered)):
+                continue
+            if any(did in offered for did in supported):
+                continue
+            if named:
+                sys.exit(f"Error: harness '{hid}' cannot be used with persona '{pid}': "
+                         f"{hid} speaks {', '.join(supported)}, and {pid} serves {serves}.")
+            refused[hid] = ", ".join(supported)
+            del harnesses[hid]
+
+        if refused and not harnesses:
+            sys.exit(f"Error: no harness can be used with persona '{pid}', which serves "
+                     f"{serves}: "
+                     + "; ".join(f"{hid} speaks {spoken}" for hid, spoken in refused.items())
+                     + ".")
+        for hid, spoken in refused.items():
+            print(f"Note: skipping {pid}-{hid} — {hid} speaks {spoken}, and {pid} serves "
+                  f"{serves}.", file=sys.stderr)
+    return config
+
+
 def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     """Assemble and resolve the configuration tree.
 
@@ -319,6 +406,8 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         persona:  Global Default -> Persona Default -> Persona Preset -> User
         harness:  Harness Default -> Harness Preset
                                   -> Persona Preset's harnesses.<hid> -> User
+        dialect:  Dialect Default -> Dialect Preset
+                                  -> Persona Preset's mind.dialects.<did> -> User
 
     ``overrides`` is a user-config-shaped mapping layered *over* the file, for
     definitions supplied on the command line. It is applied before layering, so
@@ -366,22 +455,31 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
 
     persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
     harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
+    dialect_default = load_yaml(DATA_DIR / "dialect.default.yaml", env_defaults) or {}
     known_harnesses = preset_names("harness")
+    known_dialects = preset_names("dialect")
 
     # The .default.yaml files *are* the schema; anything else the user wrote is
-    # a typo that would otherwise fail silently. pid/hid are injected, not authored.
+    # a typo that would otherwise fail silently. pid/hid are injected, not
+    # authored, and `mind.dialects` is seeded from the dialect registry rather
+    # than declared in persona.default.yaml -- but the user may still write it.
     _warn_unknown_keys(user_cfg,
                        set(base_cfg) | {"personas"},
-                       {**persona_default, "pid": None},
-                       {**harness_default, "hid": None})
+                       {**persona_default, "pid": None,
+                        "mind": {**(persona_default.get("mind") or {}), "dialects": None}},
+                       {**harness_default, "hid": None},
+                       dialect_default)
 
     # 3. Layer every persona: shipped presets plus whatever the user declared.
     for pid in dict.fromkeys(preset_names("persona") + list(users_personas)):
         preset = _load_preset("persona", pid, env_defaults, persona_default)
-        # A persona preset may also carry per-harness overrides; those are more
-        # specific than the harness presets, so they are layered separately below
-        # rather than merged in with the rest of the persona.
+        # A persona preset may also carry per-harness overrides and per-dialect
+        # mounts; both are more specific than their own presets, so they are
+        # layered separately below rather than merged in with the rest.
         preset_harnesses = preset.pop("harnesses", None) or {}
+        preset_mind = preset.get("mind")
+        preset_dialects = (preset_mind.pop("dialects", None) or {}
+                           if isinstance(preset_mind, dict) else {})
 
         persona_layer = copy.deepcopy(persona_default)
         deep_merge(preset, persona_layer)
@@ -389,12 +487,28 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         persona_layer["pid"] = pid
         persona = deep_merge(persona_layer, _ensure_dict(base_personas, pid))
 
+        declared = users_personas.get(pid)
+        declared = declared if isinstance(declared, dict) else {}
+
+        # Dialect expansion: the registry says what each protocol looks like,
+        # the persona says where it is mounted. Always built -- an endpoint
+        # serves what it serves whether or not a harness was asked for, and the
+        # harnesses reference this map through the protocol they negotiate.
+        declared_mind = declared.get("mind") if isinstance(declared.get("mind"), dict) else {}
+        dialect_map = _ensure_dict(_ensure_dict(persona, "mind"), "dialects")
+        for did in _expand_ids(preset_dialects, declared_mind.get("dialects"), known_dialects):
+            dialect_layer = copy.deepcopy(dialect_default)
+            deep_merge(_load_preset("dialect", did, env_defaults, dialect_default), dialect_layer)
+            if isinstance(preset_dialects.get(did), dict):
+                deep_merge(preset_dialects[did], dialect_layer)
+            deep_merge(dialect_layer, _ensure_dict(dialect_map, did))
+
         # Harness expansion: every known harness, plus any this persona adds --
         # narrowed to what the caller asked for, so nothing unasked-for is built
         # and, more to the point, nothing unasked-for has to be resolvable.
-        declared = users_personas.get(pid)
-        declared = declared.get("harnesses") if isinstance(declared, dict) else None
-        harness_ids = _harness_ids(preset_harnesses, declared, known_harnesses)
+        declared_harnesses = declared.get("harnesses")
+        declared_harnesses = declared_harnesses if isinstance(declared_harnesses, dict) else None
+        harness_ids = _expand_ids(preset_harnesses, declared_harnesses, known_harnesses)
         if targets is not None:
             wanted = targets.get(pid, []) if pid in targets else []
             if wanted is not None:
@@ -413,9 +527,12 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     deep_merge(user_cfg, base_cfg)
 
     # 5. Drop anything switched off, and anything outside the targets, before
-    #    resolving -- neither need hold resolvable templates.
+    #    resolving -- neither need hold resolvable templates. Then settle which
+    #    protocol each surviving pairing speaks, while both sides are still
+    #    literal strings and a mismatch can be named.
     _drop_disabled(base_cfg)
     _select_targets(base_cfg, targets)
+    _check_dialects(base_cfg, targets)
 
     # 6. Template resolution.
     return te.resolve_tree(base_cfg)
@@ -602,7 +719,11 @@ def setup_harness(persona_id, harness_id, config, key=None):
     path_var = harness.get("path_var") or ""
     auth_var = harness.get("auth_var") or ""
     wrapper_env = harness.get("wrapper_env") or {}
-    verify = harness.get("verify")
+    # How to check a key is a property of the protocol, not of the harness, so
+    # it comes from the dialect this pairing negotiated. `protocol` is a resolved
+    # literal by now and compatibility was settled before resolution, so the
+    # entry is there unless a hand-written harness dropped `protocol` entirely.
+    verify = (_dialects_of(persona).get(harness.get("protocol")) or {}).get("verify")
 
     print("\n===========================================================================")
     print(f"    {agent_desc} Setup Script  ({persona_desc} & {harness_desc})")
@@ -1179,6 +1300,9 @@ def main(argv=None):
         sys.exit("Error: no personas to set up.\n\n" + USAGE)
 
     # Settle every name against the structure, then build exactly that much.
+    # Naming no harness asks for "every harness this persona has", which is
+    # spelled `None` -- and lets load_config drop a pairing that cannot work
+    # rather than refusing the whole command over it.
     targets, available_by_pid = {}, {}
     for pid in chosen_personas:
         available = harness_names(pid, config_path, overrides=overrides)
@@ -1186,12 +1310,15 @@ def main(argv=None):
             if hid not in available:
                 sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
                          f"Available: {', '.join(available) or 'none'}")
-        targets[pid] = list(chosen_harnesses) or available
+        targets[pid] = list(chosen_harnesses) or None
         available_by_pid[pid] = available
 
     config = load_config(config_path, overrides=overrides, targets=targets)
 
-    for pid, selected in targets.items():
+    # What was built, rather than what was asked for: an incompatible pairing
+    # the caller did not name is reported by load_config and left out here.
+    for pid in targets:
+        selected = list(((config.get("personas") or {}).get(pid) or {}).get("harnesses") or {})
         for hid in selected:
             if removing:
                 remove_harness(pid, hid, config)

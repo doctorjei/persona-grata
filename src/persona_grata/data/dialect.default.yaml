@@ -1,0 +1,35 @@
+##################################################################################################
+# Dialect Default Settings
+#
+# A *dialect* is the wire protocol spoken over an endpoint. It is declared on BOTH sides -- a
+# harness lists which it can speak (best first, in `supported_dialects`), a persona's endpoint says
+# where it serves each -- and __MATCH_FIRST__ negotiates between them. No match means the agent
+# cannot be built, and is refused by name rather than failing as a template.
+#
+# These files are the REGISTRY: they seed every persona's `mind.dialects`, which the persona then
+# overrides where a protocol is mounted somewhere other than the endpoint root. Layered exactly as
+# harnesses are, including "None" to say a protocol is not served:
+#
+#   dialect:  dialect.default -> dialect.<did> -> persona's mind.dialects.<did> -> user
+#
+# A dialect is a FAMILY of endpoints, not one: `api_uri` is the mount, and the *_uri keys hang off
+# it. A harness config wants the mount; only verification wants a full operation URL.
+#
+# Dialects are ordinary presets (dialect.<id>.yaml), discovered exactly like persona.<id>.yaml and
+# harness.<id>.yaml, so a site can add one for a proxy or a variant without patching the package.
+
+api_uri: "{{endpoint}}"                          # Where this protocol is mounted
+msg_uri: "{{api_uri}}/v1/chat/completions"       # Completion/message op. (default OpenAI std)
+model_uri: "{{api_uri}}/v1/models"               # Model listing op. (default OpenAI std)
+emb_uri: "{{api_uri}}/v1/embeddings"             # Embeddings op. (default OpenAI std)
+
+verify:                                          # Auth verification settings for this protocol
+  check_uri: "{{msg_uri}}"                       # URL for auth verification (default: msg_uri)
+  key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
+  headers: []                                    # Headers the protocol requires. List: [<text>*]
+  body: ""                                       # Probe body (default: minimal "ping" request)
+
+### A dialect states only what its protocol actually changes; the rest falls through from here.
+
+### If user incorporates "verify" but not all parameters, default values will be _copied into_
+### the "verify" block.

@@ -1,0 +1,23 @@
+##################################################################################################
+# OpenAI Responses Dialect
+#
+# Spoken by: codex (its config_store sets wire_api from the negotiated protocol).   Served by:
+# OpenAI, kimi and minimax at their root (confirmed 2026-09-10). Local servers: UNVERIFIED -- if
+# they do not serve it, `pg local_ollama codex` is a mismatch and this dialect is what makes that
+# visible.
+
+
+responses:
+  msg_uri: "{{api_uri}}/v1/responses"
+  emb_uri: None
+
+  verify:
+    # Responses takes a flat `input`, not a `messages` array, so the shared probe body in
+    # __init__.py (DEFAULT_BODY) does not fit this protocol.
+    body: '{"model": "{{mind.model}}", "max_output_tokens": 16, "input": "ping"}'
+
+### This is the row that fixed a live bug. Before dialects, harness.codex.yaml declared no
+### `verify`, so it inherited /v1/chat/completions from the harness defaults while telling codex
+### to speak Responses: it verified one protocol and then talked another. That was invisible
+### against kimi and minimax, which serve both -- but against a chat-only endpoint the key check
+### passed and the agent still failed, which is the worst available outcome.

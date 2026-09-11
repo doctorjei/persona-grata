@@ -1,0 +1,9 @@
+##################################################################################################
+# OpenAI Chat Completions Dialect
+#
+# Spoken by: goose.   Served by: nearly every local server (ollama, llama.cpp, LM Studio,
+# Lemonade, vLLM, LocalAI), and most hosted vendors.
+
+# The "chat" protocol is the default the registry describes, so this file declares nothing. It
+# exists to register the id.
+chat:

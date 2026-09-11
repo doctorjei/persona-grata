@@ -16,14 +16,19 @@
 # The token stays in the environment via `auth_var` rather than being written here: goose reads
 # every provider secret from the environment when the primary one is set, which keeps the key out
 # of both this file and the shared system keyring.
+#
+# Goose already verified against chat/completions by inheriting the old harness default, so
+# declaring `chat` here only makes an existing fact explicit.
 
 goose:
   harness_desc: "Goose"
+  supported_dialects: ["chat"]
+  protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"
   auth_var: "OPENAI_API_KEY"
   path_var: "GOOSE_PATH_ROOT"
   config_file: "{{path}}/config/config.yaml"
   config_store:
     GOOSE_PROVIDER: "openai"                     # Built-in provider used for OpenAI-compatible APIs
     GOOSE_MODEL: "{{mind.model}}"
-    OPENAI_HOST: "{{base_uri}}"                  # Base URI; OPENAI_BASE_PATH supplies /v1/...
+    OPENAI_HOST: "{{mind.dialects[protocol].api_uri}}"  # Mount; OPENAI_BASE_PATH supplies /v1/...
   content: "{{config_store.__AS_YAML__()}}"

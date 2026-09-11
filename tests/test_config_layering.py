@@ -62,13 +62,30 @@ def test_persona_preset_is_unwrapped_and_applied(tmp_path):
     assert kimi["mind"]["model"].startswith("kimi-")
 
 
-def test_persona_preset_harness_override_beats_harness_default(tmp_path):
-    # The kimi preset sets claude's base_uri; the generic harness default
-    # ({{mind.endpoint}}) must not clobber it.
+def test_persona_preset_dialect_override_beats_the_registry(tmp_path):
+    # The kimi preset mounts anthropic on /anthropic; the registry default
+    # ({{endpoint}}) must not clobber it, and the protocols kimi says nothing
+    # about keep the root mount.
     cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
-    claude = cfg["personas"]["kimi"]["harnesses"]["claude"]
-    assert claude["base_uri"] == "https://api.moonshot.ai/anthropic"
-    assert claude["verify"]["check_uri"] == "https://api.moonshot.ai/anthropic/v1/messages"
+    dialects = cfg["personas"]["kimi"]["mind"]["dialects"]
+    assert dialects["anthropic"]["api_uri"] == "https://api.moonshot.ai/anthropic"
+    assert dialects["anthropic"]["msg_uri"] == "https://api.moonshot.ai/anthropic/v1/messages"
+    assert dialects["chat"]["api_uri"] == "https://api.moonshot.ai"
+    assert dialects["responses"]["msg_uri"] == "https://api.moonshot.ai/v1/responses"
+
+
+def test_the_negotiated_mount_reaches_the_harness_config(tmp_path):
+    # The whole point of placement: kimi states /anthropic once, and every
+    # harness speaking that protocol picks it up without naming the harness.
+    cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
+    harnesses = cfg["personas"]["kimi"]["harnesses"]
+    assert harnesses["claude"]["protocol"] == "anthropic"
+    settings = json.loads(harnesses["claude"]["content"])
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == "https://api.moonshot.ai/anthropic"
+    # ...and a harness speaking something else gets that protocol's mount.
+    assert harnesses["goose"]["protocol"] == "chat"
+    assert yaml.safe_load(harnesses["goose"]["content"])["OPENAI_HOST"] == \
+        "https://api.moonshot.ai"
 
 
 def test_user_override_beats_everything(tmp_path):
@@ -76,13 +93,16 @@ def test_user_override_beats_everything(tmp_path):
         personas:
           kimi:
             token: "/custom/token/path"
-            harnesses:
-              claude:
-                base_uri: "https://mine.example/anthropic"
+            mind:
+              dialects:
+                anthropic:
+                  api_uri: "https://mine.example/anthropic"
     """))
     kimi = cfg["personas"]["kimi"]
     assert kimi["token"] == "/custom/token/path"
-    assert kimi["harnesses"]["claude"]["base_uri"] == "https://mine.example/anthropic"
+    assert kimi["mind"]["dialects"]["anthropic"]["api_uri"] == "https://mine.example/anthropic"
+    assert json.loads(kimi["harnesses"]["claude"]["content"])["env"]["ANTHROPIC_BASE_URL"] == \
+        "https://mine.example/anthropic"
 
 
 def test_harness_opt_out_removes_it(tmp_path):
@@ -105,6 +125,7 @@ def test_custom_persona_and_harness_get_defaults(tmp_path):
             mind: {endpoint: "https://api.custom.com"}
             harnesses:
               custom_h:
+                supported_dialects: ["chat"]
                 auth_var: "CUSTOM_KEY"
     """))
     persona = cfg["personas"]["custom_p"]
@@ -113,7 +134,8 @@ def test_custom_persona_and_harness_get_defaults(tmp_path):
     assert custom["auth_var"] == "CUSTOM_KEY"             # user value kept
     assert custom["path_var"] == ""                       # harness default
     assert custom["path"] == "/xdg/personas/custom_p/custom_h"
-    assert custom["base_uri"] == "https://api.custom.com"
+    assert custom["protocol"] == "chat"                   # negotiated, not authored
+    assert persona["mind"]["dialects"]["chat"]["api_uri"] == "https://api.custom.com"
 
 
 def test_personas_shorthands(tmp_path):
@@ -192,7 +214,7 @@ def test_an_unbuildable_harness_does_not_break_other_personas(tmp_path):
               endpoint: "https://api.test.com"
             harnesses:
               claude:
-                base_uri: "{{mind.no_such_key}}"
+                config_file: "{{mind.no_such_key}}"
           fine:
             mind:
               endpoint: "https://api.test.com"
@@ -201,7 +223,162 @@ def test_an_unbuildable_harness_does_not_break_other_personas(tmp_path):
         pg.load_config(path, targets={"broken": ["claude"]})
 
     cfg = pg.load_config(path, targets={"fine": ["claude"]})    # ...but only then
-    assert cfg["personas"]["fine"]["harnesses"]["claude"]["base_uri"] == "https://api.test.com"
+    assert cfg["personas"]["fine"]["harnesses"]["claude"]["protocol"] == "anthropic"
+
+
+# --------------------------------------------------------------------------- #
+# Dialects: where a protocol is mounted, and which one a pairing speaks
+# --------------------------------------------------------------------------- #
+def test_every_persona_is_seeded_from_the_dialect_registry(tmp_path):
+    # A persona that says nothing about protocols serves all of them at its
+    # endpoint root -- which is what a local server, and most gateways, do.
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          plain:
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    dialects = cfg["personas"]["plain"]["mind"]["dialects"]
+    assert set(dialects) == set(pg.preset_names("dialect"))
+    assert all(d["api_uri"] == "https://api.test.com" for d in dialects.values())
+    assert dialects["anthropic"]["msg_uri"] == "https://api.test.com/v1/messages"
+    assert dialects["chat"]["msg_uri"] == "https://api.test.com/v1/chat/completions"
+
+
+def test_a_dialect_switched_off_is_not_served(tmp_path):
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          chat_only:
+            mind:
+              endpoint: "https://x.test"
+              dialects:
+                anthropic: None
+                responses: None
+    """), targets={})
+    assert set(cfg["personas"]["chat_only"]["mind"]["dialects"]) == {"chat"}
+
+
+def test_a_harness_falls_back_to_its_next_choice(tmp_path):
+    # Codex prefers Responses and works over Chat, so the protocol it ends up
+    # speaking depends on the persona -- and wire_api names whichever it got.
+    tomllib = pytest.importorskip("tomllib")
+    path = write(tmp_path, """
+        personas:
+          chat_only:
+            mind:
+              endpoint: "https://x.test"
+              dialects:
+                responses: None
+    """)
+    codex = pg.load_config(path, targets={"chat_only": ["codex"]})[
+        "personas"]["chat_only"]["harnesses"]["codex"]
+    assert codex["protocol"] == "chat"
+    provider = tomllib.loads(codex["content"])["model_providers"]["codex"]
+    assert provider["wire_api"] == "chat"
+    assert provider["base_url"] == "https://x.test"
+
+
+CHAT_ONLY = """
+personas:
+  chat_only:
+    mind:
+      endpoint: "https://x.test"
+      dialects:
+        anthropic: None
+        responses: None
+"""
+
+
+def test_a_named_incompatible_pairing_is_refused_by_name(tmp_path):
+    # Compatibility is settled while both sides are literal strings, so a
+    # pairing that cannot work reads like "unknown harness" rather than
+    # surfacing as a TemplateError about __MATCH_FIRST__.
+    path = write(tmp_path, CHAT_ONLY)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets={"chat_only": ["claude"]})
+    message = str(exit_info.value)
+    for expected in ("claude", "chat_only", "anthropic", "chat"):
+        assert expected in message
+
+    # ...and only for the pairing asked about. The persona still builds, and so
+    # does every harness it can actually speak to.
+    assert pg.load_config(path, targets={})["personas"]["chat_only"]["harnesses"] == {}
+    goose = pg.load_config(path, targets={"chat_only": ["goose"]})
+    assert goose["personas"]["chat_only"]["harnesses"]["goose"]["protocol"] == "chat"
+
+
+def test_an_unnamed_incompatible_pairing_is_dropped_not_refused(tmp_path, capsys):
+    # Asking for "every harness this persona has" is not asking for claude in
+    # particular, so one impossible cross must not stop the possible ones.
+    cfg = pg.load_config(write(tmp_path, CHAT_ONLY), targets={"chat_only": None})
+    built = cfg["personas"]["chat_only"]["harnesses"]
+    assert set(built) == {"codex", "goose"}
+    assert built["codex"]["protocol"] == "chat"          # fell back from responses
+    err = capsys.readouterr().err
+    assert "skipping chat_only-claude" in err and "speaks anthropic" in err
+
+
+def test_a_persona_no_harness_can_speak_to_is_fatal(tmp_path):
+    # Dropping every harness leaves nothing to set up, so silence would be the
+    # wrong answer even though no single cross was named.
+    path = write(tmp_path, """
+        personas:
+          mystery_box:
+            mind:
+              endpoint: "https://x.test"
+              dialects:
+                anthropic: None
+                chat: None
+                responses: None
+    """)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets={"mystery_box": None})
+    message = str(exit_info.value)
+    assert "no harness can be used" in message and "mystery_box" in message
+    assert "claude speaks anthropic" in message
+
+
+@pytest.mark.parametrize("targets", [{"orion": ["homebrew"]}, {"orion": None}, None],
+                         ids=["named", "implied", "everything"])
+def test_a_harness_declaring_no_dialect_is_always_refused(tmp_path, targets):
+    # Required of every harness, hand-written ones included: without it there is
+    # no URI, nothing to verify against, and no protocol. That is a malformed
+    # harness rather than an incompatible one, so unlike a failed negotiation it
+    # is fatal however the harness was reached -- there is nothing to fall back
+    # to and nothing the endpoint could have done differently.
+    path = write(tmp_path, """
+        personas:
+          orion:
+            mind: {endpoint: "https://x.test"}
+            harnesses:
+              homebrew:
+                auth_var: "HOMEBREW_KEY"
+    """)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(path, targets=targets)
+    message = str(exit_info.value)
+    assert "supported_dialects" in message and "homebrew" in message
+
+
+def test_a_site_can_add_a_dialect_of_its_own(tmp_path):
+    # Dialects are ordinary presets, so a proxy or a variant does not need the
+    # package patched -- declaring the mount is enough.
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          orion:
+            mind:
+              endpoint: "https://x.test"
+              dialects:
+                homegrown: {api_uri: "https://x.test/hg"}
+            harnesses:
+              custom:
+                supported_dialects: ["homegrown"]
+    """), targets={"orion": ["custom"]})
+    persona = cfg["personas"]["orion"]
+    assert persona["harnesses"]["custom"]["protocol"] == "homegrown"
+    # The registry's defaults still apply beneath it.
+    assert persona["mind"]["dialects"]["homegrown"]["msg_uri"] == \
+        "https://x.test/hg/v1/chat/completions"
 
 
 def test_harness_names_reports_without_building(tmp_path):
@@ -241,18 +418,22 @@ def test_misspelled_keys_are_reported_at_every_level(tmp_path, capsys):
             mind:
               endpoint: "https://x.test"
               modell: "typo"
+              dialects:
+                anthropic:
+                  api_url: "typo"
+                  verify:
+                    urll: "typo"
             harnesses:
               claude:
                 base_url: "typo"
-                verify:
-                  urll: "typo"
     """))
     err = capsys.readouterr().err
     for expected in ("persona_stor",
                      "personas.orion.persona_dsc",
                      "personas.orion.mind.modell",
-                     "personas.orion.harnesses.claude.base_url",
-                     "personas.orion.harnesses.claude.verify.urll"):
+                     "personas.orion.mind.dialects.anthropic.api_url",
+                     "personas.orion.mind.dialects.anthropic.verify.urll",
+                     "personas.orion.harnesses.claude.base_url"):
         assert expected in err
 
 
@@ -277,13 +458,18 @@ def test_valid_config_warns_about_nothing(tmp_path, capsys):
           orion:
             persona_desc: "Orion"
             token: "/tmp/store/orion/tok"
-            mind: {endpoint: "https://x.test", model: "m", model_1: "m1"}
+            mind:
+              endpoint: "https://x.test"
+              model: "m"
+              model_1: "m1"
+              dialects:
+                anthropic:
+                  api_uri: "https://x.test/anthropic"
+                  verify: {check_uri: "https://x.test/v", key_header: "x-api-key:", body: "{}"}
             harnesses:
               claude:
                 harness_desc: "CC"
                 auth_var: "K"
-                base_uri: "https://x.test/anthropic"
-                verify: {check_uri: "https://x.test/v", key_header: "x-api-key:", body: "{}"}
     """))
     assert "unknown setting" not in capsys.readouterr().err
 
@@ -357,7 +543,8 @@ def test_shipped_yaml_parses(path):
 
 @pytest.mark.parametrize("kind,name",
                          [("persona", n) for n in pg.preset_names("persona")] +
-                         [("harness", n) for n in pg.preset_names("harness")])
+                         [("harness", n) for n in pg.preset_names("harness")] +
+                         [("dialect", n) for n in pg.preset_names("dialect")])
 def test_preset_wrapper_matches_its_filename(kind, name):
     data = pg.load_yaml(pg.DATA_DIR / f"{kind}.{name}.yaml", pg.ENV_DEFAULTS)
     if len(data) == 1:

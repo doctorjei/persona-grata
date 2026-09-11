@@ -1,0 +1,28 @@
+##################################################################################################
+# Anthropic Messages Dialect
+#
+# Spoken by: claude.   Served by: Anthropic, kimi & minimax (at /anthropic), navigator, and
+# translating proxies.
+
+
+anthropic:
+  msg_uri: "{{api_uri}}/v1/messages"
+  emb_uri: None
+
+  verify:
+    headers:
+      - "anthropic-version: 2023-06-01"
+
+# key_header is deliberately NOT set, so it stays "Authorization: Bearer" from the registry
+# defaults -- which is what the bundled gateways accept today. A deployment wanting the original
+# Anthropic style overrides it where the mount is declared, since it is a fact about the endpoint
+# rather than about any one harness:
+#
+#     mind:
+#       dialects:
+#         anthropic:
+#           verify:
+#             key_header: "x-api-key:"
+#
+# If that split turns out to be common rather than occasional, it is the argument for a second
+# dialect (anthropic_key vs anthropic_bearer) instead of an override.

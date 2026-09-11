@@ -1,11 +1,17 @@
-
 ##################################################################################################
 # Codex-CLI Harness Settings
+#
+# This is the harness that shows why negotiation beats a single declared dialect -- codex prefers
+# Responses but works over Chat, so the winning protocol depends on the persona it is bound to,
+# and `wire_api` names whichever it got.
 
 codex:
   harness_desc: "Codex CLI"
   path_var: "CODEX_HOME"
+  supported_dialects: ["responses", "chat"]    # ordered by preference
   config_file: "{{path}}/config.toml"
+  protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"
+
   config_store:
     model: "{{mind.model}}"
     model_provider: "{{hid}}"
@@ -14,7 +20,12 @@ codex:
     model_providers:
       "{{hid}}":
         name: "{{persona_desc}}"
-        base_url: "{{base_uri}}"
-        wire_api: "responses"
+        wire_api: "{{protocol}}"
+        base_url: "{{mind.dialects[protocol].api_uri}}"
         env_key: "{{auth_var}}"
+
   content: "{{config_store.__AS_TOML__()}}"
+
+### `protocol` sits at harness level, NOT in config_store: config_store is serialized verbatim, so
+### a scratch key there would emit a stray `protocol = "responses"` into the user's config.toml.
+### Scope lookup still finds it from inside the nested provider table.

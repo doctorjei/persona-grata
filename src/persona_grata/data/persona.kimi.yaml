@@ -1,19 +1,37 @@
 ##################################################################################################
 # Kimi Persona Settings
+#
+# Kimi serves Anthropic on /anthropic and both OpenAI variants at the root (Responses confirmed
+# 2026-09-10 -- which is what the old "the codex CLI also works" note was recording).
+#
+# That /anthropic mount used to be written as a harness override:
+#
+#     harnesses:
+#       claude:
+#         base_uri: "{{mind.endpoint}}/anthropic"
+#
+# which said "for the claude harness, use this URI" -- a fact about the ENDPOINT, stated as a fact
+# about a harness, which is why nothing could reason over it. It sits in the map below now, once,
+# and any harness speaking anthropic picks it up.
 
 kimi:
   persona_desc: "Kimi"
   mind:
+    endpoint: "https://api.moonshot.ai"
+    dialects:
+      anthropic:
+        api_uri: "{{endpoint}}/anthropic"
+
     model: "kimi-k3[1m]"
     model_1: "kimi-k2.7-code" # 262144 (256K)
     model_2: "kimi-k2.7-code-highspeed"
     model_3: "kimi-k2.6"
     model_4: "kimi-k2.5"
-    endpoint: "https://api.moonshot.ai"
-  harnesses:
-    claude:
-      base_uri: "{{mind.endpoint}}/anthropic"
-      # config_store:
-      #   env:
-      #     CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"
-    # The codex CLI also works but uses completely default settings.
+
+# A per-harness setting still belongs under `harnesses`; only the placement moved. For instance:
+#
+#     harnesses:
+#       claude:
+#         config_store:
+#           env:
+#             CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1048576"

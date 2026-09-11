@@ -1,5 +1,10 @@
 ##################################################################################################
 # Harness Default Settings
+#
+# A harness declares which wire protocols it can speak, best first; the persona declares where it
+# serves each one (mind.dialects). __MATCH_FIRST__ negotiates between them, yielding the name of
+# the winning dialect -- which is both the compatibility answer ("no match" = cannot be built) and
+# the key that locates its URIs.
 
 harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
 agent_desc: "{{pid}}-{{hid}}"                    # Agent (persona + harness) display name; matches
@@ -13,12 +18,10 @@ wrapper_env: {}                                  # Extra env. vars exported by t
 config_file: ""                                  # Main harness config file (skips if empty/unset)
 config_store: {}                                 # Harness config data (stored in config file)
 content: ""                                      # Content of harness config file (default: empty)
-base_uri: "{{mind.endpoint}}"                    # Base URI for remote connections
-verify:                                          # Auth verification settings
-  check_uri: "{{base_uri}}/v1/chat/completions"  # URL for auth verification (default OpenAI std)
-  key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
-  headers: []                                    # List: [<header text>*]
-  body: ""                                       # Probe body (default: minimal "ping" request)
+supported_dialects: None                         # Protocols spoken, best first <REQUIRED>
+protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"   # Negotiated protocol
 
-### If user incorporates "verify" but not all parameters, default values will be _copied into_
-### the "verify" block.
+### `supported_dialects` is REQUIRED. With the URI and the verification settings both coming from
+### the negotiated dialect, a harness that declares none has no URI, nothing to verify against and
+### an empty protocol -- it cannot function. The pairing is refused by name before resolution
+### rather than left to fail as an unresolvable template.

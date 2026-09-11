@@ -41,16 +41,20 @@ personas:
 """
 
 # Same persona, plus a harness the presets know nothing about: no config file,
-# and (below) no variable names to export.
+# and (below) no variable names to export. `supported_dialects` is required of
+# any harness, hand-written ones included -- it is what gives it a URI to use
+# and a way to check the key.
 WITH_BARE_HARNESS = BASIC + """\
     harnesses:
       bare:
+        supported_dialects: ["chat"]
         auth_var: "BARE_KEY"
 """
 
 NO_VARIABLES = BASIC + """\
     harnesses:
       bare:
+        supported_dialects: ["chat"]
         path_var: ""
         auth_var: ""
 """
@@ -173,6 +177,29 @@ def test_a_schemeless_endpoint_is_fatal(home):
     assert not (home / ".bashrc").exists()
 
 
+def test_verification_follows_the_negotiated_protocol(home, monkeypatch):
+    # How to check a key is a property of the protocol, so the settings come
+    # from the dialect the pairing negotiated -- not from the harness. This is
+    # the bug it fixes: codex used to verify against /v1/chat/completions while
+    # telling codex to speak Responses, so against a chat-only endpoint the key
+    # check passed and the agent still failed.
+    seen = {}
+    monkeypatch.setattr(pg, "_verify_key",
+                        lambda verify, model, key: seen.update({key: verify}))
+    cfg = config(home, BASIC)
+
+    pg.setup_harness("orion", "codex", cfg)
+    assert seen["sk-test-key"]["check_uri"] == "https://api.cybertron.space/v1/responses"
+    assert '"input": "ping"' in seen["sk-test-key"]["body"]   # Responses' shape, not messages'
+
+    seen.clear()
+    monkeypatch.setattr(pg, "_confirm", lambda question, default=False: True)
+    pg.setup_harness("orion", "claude", cfg)
+    verify = seen["sk-test-key"]
+    assert verify["check_uri"] == "https://api.cybertron.space/v1/messages"
+    assert verify["headers"] == ["anthropic-version: 2023-06-01"]
+
+
 def test_an_unusable_verify_url_is_not_fatal(capsys):
     # A hand-written verify url bypasses the endpoint guard, so a malformed one
     # must degrade like any other unreachable host rather than traceback. No
@@ -187,11 +214,12 @@ def test_wrapper_env_is_exported(home):
     pg.setup_harness("orion", "bare", config(home, BASIC + """\
     harnesses:
       bare:
+        supported_dialects: ["chat"]
         auth_var: "BARE_KEY"
         wrapper_env:
           BARE_PROVIDER: "openai"
           BARE_MODEL: "{{mind.model}}"
-          BARE_HOST: "{{base_uri}}"
+          BARE_HOST: "{{mind.dialects[protocol].api_uri}}"
 """))
     rc = (home / ".bashrc").read_text()
     assert 'BARE_PROVIDER="openai"' in rc
@@ -361,6 +389,35 @@ def test_a_config_file_still_means_all_of_its_personas(home):
     assert not (home / ".config/personas/kimi").exists()
 
 
+def test_cli_sets_up_the_harnesses_that_work_and_names_the_ones_it_skips(home, capsys):
+    # Naming no harness asks for whatever this persona has, so a pairing the
+    # endpoint cannot serve is left out rather than failing the whole command.
+    path = home / "agents.yaml"
+    path.write_text("""
+personas:
+  legacy_box:
+    token: None
+    mind:
+      endpoint: "https://api.cybertron.space"
+      dialects:
+        anthropic: None
+        responses: None
+""")
+    pg.main([str(path), "legacy_box"])
+    store = home / ".config" / "personas" / "legacy_box"
+    assert (store / "codex").is_dir() and (store / "goose").is_dir()
+    assert not (store / "claude").exists()
+    assert "skipping legacy_box-claude" in capsys.readouterr().err
+
+    rc = (home / ".bashrc").read_text()
+    assert "legacy_box-codex() {" in rc and "legacy_box-claude() {" not in rc
+
+    # Naming it explicitly is a different question, and gets a different answer.
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([str(path), "legacy_box", "claude"])
+    assert "cannot be used with persona" in str(exit_info.value)
+
+
 def test_unknown_option_is_rejected(home):
     with pytest.raises(SystemExit):
         pg.main(["--bogus", "kimi"])
@@ -495,14 +552,21 @@ def test_export_loads_an_existing_persona_then_applies_replacements(home):
     assert exported["persona_desc"] == "Kimi"
 
 
-def test_export_carries_the_presets_harness_settings(home):
+def test_export_carries_the_presets_placement_and_harness_settings(home):
     import yaml
     out = home / "out.yaml"
     pg.main(["--no-token", "--export", str(out), "kimi", "codex"])
     exported = yaml.safe_load(out.read_text())["personas"]["kimi"]
-    # kimi's preset points Claude Code at a different base_uri; a template that
-    # dropped it would not reproduce the agent it claims to describe.
-    assert exported["harnesses"]["claude"]["base_uri"] == "{{mind.endpoint}}/anthropic"
+    # kimi mounts Anthropic somewhere other than its endpoint root; a template
+    # that dropped that would not reproduce the agent it claims to describe.
+    assert exported["mind"]["dialects"]["anthropic"]["api_uri"] == "{{endpoint}}/anthropic"
+
+    # A preset's genuine per-harness settings still export from `harnesses`.
+    other = home / "minimax.yaml"
+    pg.main(["--no-token", "--export", str(other), "minimax"])
+    minimax = yaml.safe_load(other.read_text())["personas"]["minimax"]
+    env = minimax["harnesses"]["claude"]["config_store"]["env"]
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "1000000"
 
 
 def test_export_of_an_untouched_persona_needs_no_flags(home):
