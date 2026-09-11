@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format follows
   repeating it under every harness that speaks it.
 - The Codex harness negotiates rather than assuming: it prefers Responses, falls back to Chat, and
   `wire_api` names whichever it got.
+- An agent may be named by its **designation**, `<persona>+<harness>` — `pg kimi+claude` is
+  `pg kimi claude`. A designation names one agent, so it settles the harness on its own.
+- `--name NAME` gives an agent a **name** of your choosing and installs it as the command `NAME`.
+  A name is how an agent is invoked, so it replaces `<persona>-<harness>` rather than adding a
+  second command, and naming an agent again renames it. It is accepted wherever a designation is,
+  so `pg -r NAME` removes that agent and releases the name. An agent that is never named keeps its
+  designation as its name. Chosen names are recorded in `<persona_store>/agent_names.yaml`.
 - Template references may carry `[...]` subscripts, which index by another reference — resolved in
   the scope of the node holding the template, so `{{mind.dialects[protocol].api_uri}}` reads "the
   entry named by *my* protocol". Subscripts chain, index mappings by key and lists by position.
@@ -33,6 +40,9 @@ All notable changes to this project are documented here. The format follows
   `{{mind.dialects[protocol].api_uri}}`, and `verify` belongs to the dialect
   (`mind.dialects.<name>.verify`) — how to check a key is a property of the protocol, not of the
   harness that speaks it.
+- **Breaking:** a persona, harness, or dialect name may now contain only letters and digits (in any
+  language), `-`, and `_`; `default` is reserved. An `agents.yaml` using anything else — a dotted
+  name such as `kimi.k3`, most often — needs renaming. See Fixed, below.
 - Naming no harness (`pg agents.yaml kimi`) sets up the ones the endpoint can actually serve, and
   names the ones it skips, rather than failing over a single pairing that cannot work. Naming a
   harness explicitly still fails if that pairing is impossible, and a persona no harness can speak
@@ -46,6 +56,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A persona, harness, or dialect name containing `.` or `/` was accepted, and a name becomes a
+  directory: `pg --endpoint … --no-token .. claude` wrote the harness config outside the persona
+  store entirely, where `--remove` would then have pointed. Names are now held to one rule —
+  letters and digits in any language, plus `-` and `_` — shared with kanibako, which reads this
+  store. `default` is reserved.
 - The Codex preset verified API keys against `/v1/chat/completions` while telling codex to speak
   Responses. Against an endpoint serving both, this was invisible; against one serving only Chat,
   the key check passed and the agent still failed. Each dialect now carries its own verification

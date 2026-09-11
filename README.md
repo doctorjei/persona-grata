@@ -108,6 +108,25 @@ _Setup every persona in the file with all known harnesses._
 
 `pg` is a shorter alias for the same command: `pg kimi claude`.
 
+### Designations & Names
+
+An agent's **designation** is `<persona>+<harness>`. It names one agent, so it settles the harness
+on its own:
+
+`pg kimi+claude`
+
+_The same as `pg kimi claude`._
+
+A **name** is yours to choose, and is how the agent is invoked. Pass `--name` to set one:
+
+`pg --name scout local_ollama+codex`
+
+_Sets up the agent and installs it as `scout` rather than `local_ollama-codex`._
+
+A name replaces that command rather than adding a second one, so an agent always has exactly one
+way to run it; naming it again renames it. Use the name wherever a designation goes — `pg -r scout`
+removes it, and releases the name. An agent you never name keeps its designation as its name.
+
 ### Create a Configuration via CLI
 
 For one-off variants or local model servers, persona configurations can be defined by arguments:
@@ -185,6 +204,7 @@ and sourcing your config (`source ~/.bashrc`) or opening a new terminal, you can
 | `--export FILE` | Export a template for this configuration to file named `FILE` |
 | `-i`, `--interactive` | Ask for whatever is not given above; offers to save the result |
 | `--token FILE` | Read the API key from `FILE` rather than prompting for it^ |
+| `--name NAME` | Call this agent `NAME`, and install it as the command `NAME` |
 
 _*If the `--no-token` flag is not included, connections to keyless-only servers will fail._
 
