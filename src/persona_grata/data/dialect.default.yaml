@@ -16,7 +16,8 @@
 # it. A harness config wants the mount; only verification wants a full operation URL.
 #
 # Dialects are ordinary presets (dialect.<id>.yaml), discovered exactly like persona.<id>.yaml and
-# harness.<id>.yaml, so a site can add one for a proxy or a variant without patching the package.
+# harness.<id>.yaml. To describe a proxy or a variant of your own, declare it in your agents.yaml
+# under the persona's mind.dialects -- the registry seeds every key you leave out.
 
 api_uri: "{{endpoint}}"                          # Where this protocol is mounted
 msg_uri: "{{api_uri}}/v1/chat/completions"       # Completion/message op. (default OpenAI std)
