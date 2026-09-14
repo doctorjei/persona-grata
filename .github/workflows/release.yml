@@ -1,0 +1,91 @@
+name: Release
+
+# Publishes to PyPI via Trusted Publishing (OIDC). There is no API token: PyPI
+# verifies a short-lived token minted by GitHub for this repository and this
+# workflow file, so the name of this file is part of the trust configuration --
+# renaming it breaks publishing until PyPI's publisher entry is updated to match.
+#
+# Triggered by pushing a version tag, which is how a release is cut:
+#   git tag -a v0.0.3 -m "persona-grata 0.0.3" && git push origin v0.0.3
+#
+# The tag is not trusted to be right. `verify` re-derives the version from the
+# package metadata and fails unless the tag agrees, so a mistyped tag stops here
+# rather than publishing a version number nobody can reuse.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      # The same suite CI runs, including the documentation checks -- a release
+      # must not be the one build nobody tested.
+      - run: pytest -q
+      - name: Tag must match the declared version
+        id: check
+        run: |
+          version="$(python -c 'import persona_grata; print(persona_grata.__version__)')"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match __version__ $version"
+            exit 1
+          fi
+          echo "publishing $version"
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      # Same guard as CI's package job: the presets are the product, and a wheel
+      # without them installs cleanly and then fails at runtime.
+      - name: Verify presets ship in the wheel
+        run: |
+          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/harness.claude.yaml'
+          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/persona.kimi.yaml'
+      - name: Verify the installed console scripts run
+        run: |
+          pip install dist/*.whl
+          persona-grata --help
+          pg --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    # The environment is where PyPI's publisher entry is scoped, and it is also
+    # where a required-reviewer rule can be attached if a manual gate is ever
+    # wanted before an upload that cannot be undone.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/persona-grata/${{ needs.verify.outputs.version }}/
+    permissions:
+      # Required for Trusted Publishing: lets the job mint the OIDC token PyPI
+      # checks. Nothing else in this repository needs it.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
