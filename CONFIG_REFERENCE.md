@@ -237,14 +237,13 @@ The dialect negotiated for this pairing; indexes the persona's entry for it.
 
 ## Dialect Configuration (Per Persona)
 
-A dialect is a wire protocol (`anthropic`, `chat`, `responses`) mounted under `mind.dialects`. It
-is a family of endpoints, not one URL: `api_uri` is the mount, the rest hang off it.
+A dialect is a wire protocol (`anthropic`, `chat`, `responses`) mounted under `mind.dialects`.
 
 ### `api_uri` -> `str`
 - Required: **No**
 - Default: `"{{endpoint}}"`
 
-Mount for this protocol.
+Mount point for this protocol.
 
 ### `msg_uri` -> `str`
 - Required: **No**
