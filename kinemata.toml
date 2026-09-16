@@ -1,0 +1,52 @@
+# Written by `kinemata init`. Every section below is optional except that the
+# file must declare at least one check -- a config nothing can fail is not a
+# configuration.
+
+[project]
+root = "."
+exclude = ["build/", "dist/"]
+
+# Falsify what the documentation says about this tree: paths that do not exist,
+# links that do not resolve, commits that are not in history. Needs no registry.
+[claims]
+suffixes = [".md"]
+# historical = ["archives/"]   # a record of what was true is not a stale claim
+
+# A claim deferred until a date, which is what stops a deferral from being an
+# ignore list. `path` defers a file the project will produce; `what` defers
+# anything else. Both need `until`.
+#
+# [[promise]]
+# path  = "docs/report.md"
+# until = "2026-12-01"
+
+# Names this project has retired. A rename is only finished when nothing spells
+# the old name, and "nothing" is a claim worth checking rather than asserting.
+# Matched as prose with the default boundary: inline code spans are exempt, so
+# CHANGELOG's rename history stays clean; fenced blocks are NOT exempt, so a
+# doc example using a dead name fails instead of teaching it.
+[[registry]]
+name = "retired"
+kind = "substitutions"
+suffixes = [".md"]
+case_sensitive = true   # identifiers; `Chat()` is a different thing
+
+  [registry.words]
+  openai_chat = "chat"                  # split into chat / responses 2026-09-10
+  openai_responses = "responses"        # split into chat / responses 2026-09-10
+  'verify["url"]' = "verify.check_uri"  # renamed 9cb4e26; bracket form only
+
+# The checks that must run, and the workflow that must run them. Deleting a
+# step from CI now fails this gate instead of quietly passing; the only way to
+# make it pass again is to delete the declaration too, which is a visible edit.
+[[gate]]
+command = "pytest -q"
+note = "the suite itself, on 3.9 / 3.11 / 3.13"
+
+[[gate]]
+command = "kinemata check"
+note = "registries against this tree"
+
+[[gate]]
+command = "kinemata claims"
+note = "documentation, and this inventory"

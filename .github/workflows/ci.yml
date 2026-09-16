@@ -44,3 +44,20 @@ jobs:
           pip install dist/*.whl
           persona-grata --help
           pg --help
+
+  # A reminder, not a catch: no branch protection requires this job, so an
+  # agent with write access could gut it. Declared as what it is until that
+  # changes. Runs 3.13 only -- kinemata needs >=3.11 and the floor stays 3.9.
+  kinemata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # Exact pin: 0.x API is unsettled per its README, so no >=, no git ref.
+      - run: pip install "kinemata==0.1.1"
+      # Advisory first, so the log shows the full picture even when green.
+      - run: kinemata review --verbose
+      - run: kinemata check
+      - run: kinemata claims

@@ -145,7 +145,7 @@ By default, a definition is ephemeral, but the configuration can be exported if 
 
 `pg --endpoint http://who.dr:99 --model llama3 --no-token --export "clauma.yaml" ollama claude`
 
-_Exports the configuration to `clauma.yaml`._
+_Exports the configuration to clauma.yaml._
 
 Export, update, and new persona creation are mutually exclusive:
 
@@ -216,7 +216,7 @@ Definitions are managed in an agent YAML file. It describes one or more personas
 Persona-Grata supports a dynamic variable resolution system via `{{variable}}` syntax.
 
 - **Context Lookup**: Resolves variables defined in current context (e.g., `{{pid}}`, `{{path}}`).
-- **Hierarchical References**: Absolute references to any value in `agents.yaml` via dot-notation
+- **Hierarchical References**: Absolute references to any value in agents.yaml via dot-notation
   (e.g., `{{personas.orion.mind.model}}`).
 - **Reserved Identifiers**: `{{__PARENT__}}` resolves to the immediate parent node in the
   configuration tree and `{{__KEY__}}` to a node's own key, so `{{__PARENT__.__KEY__}}` in a

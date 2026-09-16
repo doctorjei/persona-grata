@@ -37,20 +37,20 @@ All notable changes to this project are documented here. The format follows
 
 - **Breaking:** every harness must declare `supported_dialects`. Its URI and its key-verification
   settings both come from the negotiated dialect, so a harness declaring none has neither. A
-  hand-written harness in an `agents.yaml` needs the new key.
+  hand-written harness in an agents.yaml needs the new key.
 - **Breaking:** `base_uri` and the harness-level `verify` block are gone. The mount is now
   `{{mind.dialects[protocol].api_uri}}`, and `verify` belongs to the dialect
   (`mind.dialects.<name>.verify`) — how to check a key is a property of the protocol, not of the
   harness that speaks it.
 - **Breaking:** a persona, harness, or dialect name may now contain only letters and digits (in any
-  language), `-`, and `_`; `default` is reserved. An `agents.yaml` using anything else — a dotted
+  language), `-`, and `_`; `default` is reserved. An agents.yaml using anything else — a dotted
   name such as `kimi.k3`, most often — needs renaming. See Fixed, below.
 - Naming no harness (`pg agents.yaml kimi`) sets up the ones the endpoint can actually serve, and
   names the ones it skips, rather than failing over a single pairing that cannot work. Naming a
   harness explicitly still fails if that pairing is impossible, and a persona no harness can speak
   to is an error either way.
 - `verify.url` is now `verify.check_uri`, matching the `*_uri` naming used for the other endpoint
-  URLs. A hand-written `agents.yaml` that sets it needs the new name.
+  URLs. A hand-written agents.yaml that sets it needs the new name.
 - Only the persona-and-harness pairings actually being acted on are built. Every persona is still
   assembled, so absolute references such as `{{personas.kimi.mind.model}}` keep resolving; what no
   longer resolves is a reference *into* another persona's harness settings. Resolution is
@@ -74,7 +74,7 @@ A development snapshot of everything listed under [Unreleased] above, published 
 designation and naming work can be installed and exercised before 0.0.3 is settled. It is a
 pre-release, so `pip install persona-grata` does not select it; use `pip install --pre`.
 
-**It carries breaking changes.** A hand-written `agents.yaml` needs `supported_dialects` on every
+**It carries breaking changes.** A hand-written agents.yaml needs `supported_dialects` on every
 harness, has no `base_uri` or harness-level `verify` to set, and may not use a name containing `.`
 or `/`. See Changed and Fixed under [Unreleased] for the migration in each case.
 
