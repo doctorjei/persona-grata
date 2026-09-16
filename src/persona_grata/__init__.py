@@ -1414,17 +1414,34 @@ def _export_definition(path, persona_id, definition):
     print(f" - Exported persona '{persona_id}' to {path}.")
 
 
-def _check_name(persona, personas, defining, creating, updating):
+def _in_store(structure, personas, persona):
+    """Whether a persona unknown to the configs exists as an installed agent.
+
+    A persona set up from flags alone is written to the store but to no config
+    file, so the structural view cannot see it. Same predicate removal already
+    uses to rebuild one.
+    """
+    return (persona is not None and persona not in personas
+            and (_path(structure.get("persona_store") or ".") / persona).is_dir())
+
+
+def _check_name(persona, personas, defining, creating, updating, store_has=False):
     """Hold a persona name to the mode that named it.
 
     Creating and updating are separate intents, and each says which one it is:
     --update requires the persona to exist, its absence requires that it does
     not. Either way a name collision is reported rather than silently resolved.
+
+    "Exists" counts the store as well as the configs: a flag-defined persona
+    lives in the former but not the latter, and re-creating one would silently
+    overwrite a working agent -- the exact loss the second check guards
+    against for config-defined personas.
     """
-    if updating and persona is not None and persona not in personas:
+    exists = persona in personas or store_has
+    if updating and persona is not None and not exists:
         sys.exit(f"Error: persona '{persona}' does not exist; omit --update to "
                  f"create it.\n\n{USAGE}")
-    if (defining or creating) and persona in personas and not updating:
+    if (defining or creating) and exists and not updating:
         sys.exit(f"Error: persona '{persona}' already exists; pass --update to "
                  f"change it.\n\n{USAGE}")
 
@@ -1490,8 +1507,10 @@ def main(argv=None):
     # same rule -- and rejected while it can still be retyped.
     save_path = None
     if interactive:
-        known = load_config(config_path, targets={}).get("personas") or {}
-        _check_name(persona, known, True, creating, updating)
+        istructure = load_config(config_path, targets={})
+        known = istructure.get("personas") or {}
+        _check_name(persona, known, True, creating, updating,
+                     store_has=_in_store(istructure, known, persona))
         interviewed = _interview(persona, chosen_harnesses, definition,
                                  export_path, config_path, known, updating, key_file)
         if interviewed is None:
@@ -1533,7 +1552,18 @@ def main(argv=None):
                      f"drop {' and '.join(repr(h) for h in chosen_harnesses)}.\n\n{USAGE}")
         persona, chosen_harnesses = chosen_names[persona][0], [chosen_names[persona][1]]
 
-    _check_name(persona, personas, definition, creating, updating)
+    _check_name(persona, personas, definition, creating, updating,
+                store_has=_in_store(structure, personas, persona))
+
+    if updating and persona is not None and persona not in personas:
+        # A store-only persona has no authored layer to merge over, so the
+        # flags become the whole definition -- which means a flagless --update
+        # would silently reset it to defaults. Refuse that and say so.
+        if not definition:
+            sys.exit(f"Error: persona '{persona}' is not defined in a loaded "
+                     f"config, so there is nothing to merge an update over; "
+                     f"retype the full definition (naming its config file too "
+                     f"if it lives in one).\n\n{USAGE}")
 
     if definition:
         overrides = {"personas": {persona: definition}}
@@ -1543,8 +1573,9 @@ def main(argv=None):
     # A persona set up from flags alone exists in the store but in no config, so
     # removing it by name would not find it. Everything removal needs -- the
     # wrapper markers and the directories -- derives from the id, so rebuild it
-    # from the defaults once the store confirms it is really there. Setup does
-    # *not* get this treatment: there, an unknown name is a typo, not a target.
+    # from the defaults once the store confirms it is really there. The mode
+    # checks above consult the store for the same reason; a name in neither
+    # place is still a typo (setup) or a mistake (--update), not a target.
     if removing and persona is not None and persona not in personas:
         if (_path(structure.get("persona_store") or ".") / persona).is_dir():
             overrides = {"personas": {persona: {}}}

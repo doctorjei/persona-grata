@@ -786,6 +786,34 @@ def test_update_requires_the_persona_to_exist(home):
         pg.main(["--update", "--model", "m", "--no-token", "nosuch", "claude"])
 
 
+def test_recreating_a_flag_defined_persona_needs_update(home):
+    # A persona defined by flags lives in the store but in no config. It is
+    # still an existing persona: silently replacing it would lose a working
+    # agent exactly as with a config-defined one.
+    pg.main(LOCAL_FLAGS + ["laguna", "claude"])
+    with pytest.raises(SystemExit):
+        pg.main(LOCAL_FLAGS + ["laguna", "claude"])
+
+
+def test_update_replaces_a_flag_defined_persona(home):
+    # With no authored layer the flags become the whole definition, merged
+    # over the defaults -- so no --export is needed to change one.
+    pg.main(LOCAL_FLAGS + ["laguna", "claude"])
+    pg.main(["--update", "--endpoint", "http://lan:9931", "--no-token",
+             "laguna", "claude"])
+    settings = json.loads(
+        (home / ".config/personas/laguna/claude/settings.json").read_text())
+    assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://lan:9931"
+
+
+def test_update_of_a_store_only_persona_needs_a_definition(home):
+    # With nothing to merge over, a flagless --update would silently reset the
+    # persona to defaults. Refuse it rather than resolve it.
+    pg.main(LOCAL_FLAGS + ["laguna", "claude"])
+    with pytest.raises(SystemExit):
+        pg.main(["--update", "laguna", "claude"])
+
+
 def test_export_sets_nothing_up(home):
     # Export is the whole operation, not a step appended to a setup.
     pg.main(["--export", str(home / "out.yaml"), "kimi", "codex"])
