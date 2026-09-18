@@ -528,6 +528,43 @@ def test_a_subscript_indexes_a_list_by_position():
     """)["v"] == "c"
 
 
+def test_a_literal_integer_subscript_is_the_index():
+    # It used to be read as a reference to an identifier named "1", which never
+    # exists -- so a list could only be indexed indirectly, through a name bound
+    # to the number. Reported by the maintainer as an implementation bug, not a
+    # spec-wording one.
+    assert _resolve("""
+        rows: [[a, b], [c, d]]
+        v: "{{rows[1][0]}}"
+    """)["v"] == "c"
+
+
+def test_literal_and_referenced_subscripts_mix():
+    assert _resolve("""
+        j: 0
+        rows: [[a, b], [c, d]]
+        v: "{{rows[1][j]}}"
+    """)["v"] == "c"
+
+
+def test_a_literal_zero_subscript_indexes_the_first_entry():
+    # Guards the obvious falsey-index slip: 0 must not read as "no subscript".
+    assert _resolve("""
+        rows: [[a, b]]
+        v: "{{rows[0][1]}}"
+    """)["v"] == "b"
+
+
+def test_an_out_of_range_index_is_a_template_error_not_a_key_error():
+    # Rule 6d says an absent entry fails; it must fail as the engine's own error
+    # rather than letting a bare KeyError escape from the tree walk.
+    with pytest.raises(te.TemplateError):
+        _resolve("""
+            rows: [a]
+            v: "{{rows[9]}}"
+        """)
+
+
 def test_subscripts_chain():
     assert _resolve("""
         a: "x"

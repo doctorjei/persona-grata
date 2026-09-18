@@ -24,6 +24,11 @@ _ENV_RE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-
 _TMPL_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 _CALL_RE = re.compile(r"^(__[A-Za-z0-9_]+__)\((.*)\)$")
 _SUBSCRIPT_RE = re.compile(r"^([^\[\]]*)((?:\[[^\[\]]*\])*)$")
+#: A subscript written as a bare non-negative integer is that position, not a
+#: reference to an identifier of the same name. Negative forms are deliberately
+#: NOT matched: `[-1]` stays a reference, so "last element" is not quietly
+#: acquired along the way.
+_INT_SUBSCRIPT_RE = re.compile(r"^[0-9]+$")
 
 _RESERVED = ("self", "__PARENT__", "__KEY__")
 
@@ -326,17 +331,34 @@ def _apply_subscripts(cursor, subscripts, path, root, ref):
     The subscript resolves in the scope of the node holding the template, not
     of the node being indexed -- ``mind.dialects[protocol]`` means "the entry of
     mind.dialects named by *my* protocol".
+
+    A bare non-negative integer is the exception: it IS the index. Treating it as
+    a reference meant ``{{rows[1]}}`` looked up an identifier named ``1``, never
+    found one, and failed -- so a list could be indexed only indirectly, through
+    a name bound to the number. Nothing is shadowed by this, since an identifier
+    made entirely of digits cannot be written as one anyway.
     """
     for inner in re.findall(r"\[([^\[\]]*)\]", subscripts):
-        key = _resolve_ref(inner.strip(), path, root)
-        if _holds_template(key):
-            raise _Deferred(inner)      # the key itself is not resolved yet (rule 0b)
+        inner = inner.strip()
+        if _INT_SUBSCRIPT_RE.match(inner):
+            key = int(inner)
+        else:
+            key = _resolve_ref(inner, path, root)
+            if _holds_template(key):
+                raise _Deferred(inner)  # the key itself is not resolved yet (rule 0b)
         node = _get(root, cursor)
         if isinstance(node, list):
             try:
                 key = int(key)
             except (TypeError, ValueError):
                 raise TemplateError(f"list subscript {key!r} is not an index in {ref!r}")
+            # Range is checked here so an absent entry fails as a TemplateError
+            # (rule 6d) rather than escaping as a bare KeyError from _get. The
+            # bounds admit Python's negative indexing, which a referenced
+            # subscript has always done; only the crash is being fixed.
+            if not -len(node) <= key < len(node):
+                raise TemplateError(f"no entry {key!r} in "
+                                    f"{'.'.join(map(str, cursor))!r} for {ref!r}")
         elif not isinstance(node, dict) or key not in node:
             raise TemplateError(f"no entry {key!r} in {'.'.join(map(str, cursor))!r} "
                                 f"for {ref!r}")
