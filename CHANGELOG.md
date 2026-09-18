@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format follows
 - `__MATCH_FIRST__(key_set, items)` returns the first member of `key_set` that appears among
   `items`' keys, reading the list as a preference order. Unlike a serializer it is the whole
   reference rather than the end of one, and its arguments may resolve to containers.
+- `auth_placeholder`, a harness setting giving a stand-in value for `auth_var` when a persona has
+  no token. It exists for harnesses that will not start unless their key variable is set, whatever
+  it contains. A harness opts in by referencing `{{auth_placeholder}}` wherever its own
+  configuration carries environment variables; the Claude Code preset does.
 
 ### Changed
 
@@ -68,6 +72,14 @@ All notable changes to this project are documented here. The format follows
   the key check passed and the agent still failed. Each dialect now carries its own verification
   settings, so the protocol checked is the protocol spoken.
 - A list of mappings now renders as a TOML array of tables, not a quoted repr.
+- A persona with no token (`token: None`) set up cleanly and then could not start. `auth_var` was
+  declared whether or not a key existed, so the Codex config named an `env_key` the shell wrapper —
+  correctly — never assigns, and Codex refused with `Missing environment variable`; Claude Code,
+  which requires its variable set even against an endpoint needing no key, refused with
+  `Please run /login`. Only Goose was unaffected. Setup reported success in every case, so the
+  failure appeared at first invocation rather than at setup. `auth_var` is now cleared when there
+  is no token, and a harness that needs the variable present supplies a stand-in through
+  `auth_placeholder`.
 
 ## [0.0.3.dev1] — 2026-09-14
 

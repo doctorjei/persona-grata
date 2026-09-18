@@ -59,6 +59,17 @@ NO_VARIABLES = BASIC + """\
         auth_var: ""
 """
 
+# An endpoint that needs no key at all -- a local model server, typically.
+NO_TOKEN = """
+personas:
+  orion:
+    persona_desc: "Orion Toolkit"
+    token: None
+    mind:
+      endpoint: "https://api.cybertron.space"
+      model: "alpha-3-on"
+"""
+
 
 def test_full_setup_writes_every_artifact(home, capsys):
     pg.setup_harness("orion", "claude", config(home, BASIC))
@@ -90,6 +101,30 @@ def test_wrapper_omits_unset_variables(home):
     # No name means no assignment -- a bare `="..."` word would break the function.
     assert '="' not in rc
     assert '  command bare "$@"' in rc
+    subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
+
+
+def test_a_tokenless_persona_sets_up_an_agent_that_can_actually_start(home):
+    """codex refused to start when ``env_key`` named a variable nothing sets.
+
+    Found by invoking the agent rather than by reading the config -- setup
+    reported success either way. The wrapper's omission is correct and stays;
+    what had to go is the *declaration* that a key would be waiting in a
+    variable the wrapper is guaranteed not to set.
+    """
+    pg.setup_harness("orion", "codex", config(home, NO_TOKEN))
+
+    store = home / ".config" / "personas" / "orion"
+    assert not (store / "token").exists()
+    assert not (store / ".secret_path").exists()
+
+    written = (store / "codex" / "config.toml").read_text()
+    assert "env_key" not in written
+    assert "None" not in written       # the string "None" is not an absent key
+
+    rc = (home / ".bashrc").read_text()
+    assert "API_KEY" not in rc
+    assert f'CODEX_HOME="{store / "codex"}"' in rc
     subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
 
 

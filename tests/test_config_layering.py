@@ -642,6 +642,90 @@ def test_codex_content_is_toml_naming_the_harness(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# A tokenless persona names no auth variable
+# --------------------------------------------------------------------------- #
+# Found by running the agents rather than reading the configs: codex refuses to
+# start with `Missing environment variable: API_KEY` when `env_key` names one the
+# wrapper -- correctly -- never sets, because there is no token to read. Setup
+# reported success, so only an invoke could surface it.
+def test_a_tokenless_persona_declares_no_env_key(tmp_path):
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            token: None
+            mind:
+              endpoint: "https://api.test.com"
+              model: "only-one"
+    """))
+    content = cfg["personas"]["test_user"]["harnesses"]["codex"]["content"]
+    assert "env_key" not in content
+    # Not merely falsy: `None` renders as the literal string "None", which
+    # survives pruning and is exactly the shape this guards against.
+    assert "None" not in content
+
+
+def test_a_tokenless_persona_clears_auth_var_on_every_harness(tmp_path):
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            token: None
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    harnesses = cfg["personas"]["test_user"]["harnesses"]
+    assert harnesses                                   # the loop below must not be vacuous
+    for hid, harness in harnesses.items():
+        assert harness["auth_var"] == "", hid
+
+
+def test_a_tokenless_claude_gets_a_stand_in_auth_token(tmp_path):
+    """Claude Code refuses to start without the variable set, key or no key.
+
+    It checks presence, not validity, so a stand-in is enough -- but it must be
+    a value the loader will not read back as "unset". ``none`` and ``null`` are
+    both in ``_UNSET_TOKENS`` and would prune straight back out.
+    """
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            token: None
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    env = json.loads(cfg["personas"]["test_user"]["harnesses"]["claude"]["content"])["env"]
+    stand_in = env["ANTHROPIC_AUTH_TOKEN"]
+    assert stand_in
+    assert stand_in.strip().lower() not in pg._UNSET_TOKENS
+
+
+def test_a_stand_in_never_shadows_a_real_token(tmp_path):
+    """With a token the wrapper exports the real key, so the file must not."""
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    claude = cfg["personas"]["test_user"]["harnesses"]["claude"]
+    assert claude["auth_placeholder"] == ""
+    assert "ANTHROPIC_AUTH_TOKEN" not in json.loads(claude["content"])["env"]
+
+
+def test_a_persona_with_a_token_keeps_its_auth_var(tmp_path):
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+              model: "only-one"
+    """))
+    persona = cfg["personas"]["test_user"]
+    assert persona["token"] == "/xdg/personas/test_user/token"
+    assert persona["harnesses"]["codex"]["auth_var"] == "API_KEY"
+    assert 'env_key = "API_KEY"' in persona["harnesses"]["codex"]["content"]
+
+
+# --------------------------------------------------------------------------- #
 # The shipped data/ library itself
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("path", sorted(pg.DATA_DIR.glob("*.yaml")), ids=lambda p: p.name)

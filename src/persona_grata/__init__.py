@@ -349,6 +349,39 @@ def _drop_disabled(config):
     return config
 
 
+def _settle_auth(config):
+    """Settle ``auth_var`` against ``auth_placeholder``; exactly one survives.
+
+    ``auth_var`` names the environment variable a key travels in;
+    ``auth_placeholder`` is a stand-in for harnesses that refuse to start unless
+    that variable is set, key or no key. Which one applies is a fact about the
+    *persona* (has it a token?), while where it goes is a fact about the
+    *harness* -- so this settles the values and the presets do the placing.
+
+    With **no token**, ``auth_var`` is cleared. Naming a variable nothing will
+    set is actively harmful: codex renders it into its provider table as
+    ``env_key`` and then refuses to start with ``Missing environment variable``,
+    while the wrapper -- correctly -- omits the assignment precisely because
+    there is no token to read. Setup reports success and the agent cannot run.
+
+    With **a token**, the stand-in is cleared instead, so it can never shadow the
+    real key the wrapper exports.
+
+    Both clear to ``""`` so the existing prune rule removes them. ⚑ Not to
+    ``None``: a reference to ``None`` renders as the literal string ``"None"``,
+    which survives pruning and emits exactly what this avoids. ``""`` is the
+    schema's own spelling for an unset scalar (``path_var``, ``mind.model_1``).
+    """
+    for persona in _ensure_dict(config, "personas").values():
+        if not isinstance(persona, dict):
+            continue
+        spent = "auth_placeholder" if persona.get("token") else "auth_var"
+        for harness in (persona.get("harnesses") or {}).values():
+            if isinstance(harness, dict):
+                harness[spent] = ""
+    return config
+
+
 def _expand_ids(preset_entries, declared, known):
     """The ids a persona has for one kind, from keys alone -- nothing is resolved.
 
@@ -620,6 +653,7 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     #    protocol each surviving pairing speaks, while both sides are still
     #    literal strings and a mismatch can be named.
     _drop_disabled(base_cfg)
+    _settle_auth(base_cfg)
     _select_targets(base_cfg, targets)
     _check_dialects(base_cfg, targets)
 
