@@ -97,8 +97,22 @@ def _toml_key(key):
     return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_str(key)
 
 
+def _toml_path(prefix):
+    return ".".join(_toml_key(k) for k in prefix)
+
+
 def _toml_str(text):
     return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _toml_inline_table(data):
+    """Render a mapping on one line: ``{a = 1, b = "x"}``.
+
+    Only reachable from inside a list. A list of *all* mappings becomes an array
+    of tables instead, which reads better; this is the fallback for a mixed list,
+    which an array of tables cannot express at all.
+    """
+    return "{" + ", ".join(f"{_toml_key(k)} = {_toml_value(v)}" for k, v in data.items()) + "}"
 
 
 def _toml_value(value):
@@ -108,28 +122,62 @@ def _toml_value(value):
         return repr(value)
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return _toml_inline_table(value)
     return _toml_str(value)
 
 
-def _toml_table(data, prefix, out):
-    scalars = {k: v for k, v in data.items() if not isinstance(v, dict)}
-    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
+def _is_table_array(value):
+    """A non-empty list whose items are all mappings -- TOML's array of tables.
+
+    Empty is excluded deliberately: ``[]`` satisfies "every item is a mapping"
+    vacuously, but an array of tables is written *as* its elements' headers, so
+    zero elements would emit nothing and silently drop the key. (`prune` already
+    discards an empty list, so this guards a direct caller, not a live path.)
+    """
+    return isinstance(value, list) and bool(value) and all(isinstance(v, dict) for v in value)
+
+
+def _blank(out):
+    if out and out[-1] != "":
+        out.append("")
+
+
+def _toml_table(data, prefix, out, header=True):
+    scalars = {k: v for k, v in data.items()
+               if not isinstance(v, dict) and not _is_table_array(v)}
+    children = {k: v for k, v in data.items() if k not in scalars}
 
     # A super-table holding nothing but sub-tables needs no header of its own.
-    if prefix and (scalars or not tables):
-        out.append("[" + ".".join(_toml_key(k) for k in prefix) + "]")
+    # `header=False` says the caller already wrote one: an array element's body
+    # is an ordinary table that happens to sit under [[...]] instead of [...].
+    if header and prefix and (scalars or not children):
+        out.append("[" + _toml_path(prefix) + "]")
     for key, val in scalars.items():
         out.append(f"{_toml_key(key)} = {_toml_value(val)}")
-    for key, val in tables.items():
-        if out and out[-1] != "":
-            out.append("")
-        _toml_table(val, prefix + [key], out)
+    # Scalars must all precede the headers below, or a reader would attribute
+    # them to whichever table was declared last rather than to this one.
+    for key, val in children.items():
+        if isinstance(val, dict):
+            _blank(out)
+            _toml_table(val, prefix + [key], out)
+            continue
+        for element in val:
+            _blank(out)
+            # Double brackets are an array of tables; a single [x] repeated is a
+            # duplicate-declaration error, not a second element.
+            out.append("[[" + _toml_path(prefix + [key]) + "]]")
+            _toml_table(element, prefix + [key], out, header=False)
 
 
 def to_toml(value):
     """Render a subtree as TOML (unset entries pruned).
 
     Nested dicts become tables: ``{a: {b: {x: 1}}}`` -> ``[a.b]`` / ``x = 1``.
+    A list of mappings becomes an array of tables: ``{a: [{x: 1}, {x: 2}]}`` ->
+    ``[[a]]`` / ``x = 1`` / ``[[a]]`` / ``x = 2``. A list that mixes mappings
+    with anything else falls back to inline tables, which an array of tables
+    cannot express.
     """
     value = prune(value)
     if not isinstance(value, dict):

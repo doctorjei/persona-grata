@@ -352,6 +352,43 @@ def test_toml_value_types_and_quoting():
     assert '"odd key" = "v"' in out
 
 
+def test_toml_renders_a_list_of_mappings_as_an_array_of_tables():
+    # Regression: `_toml_value` had no dict branch, so a mapping inside a list
+    # fell through to `_toml_str` and was emitted as a quoted Python repr --
+    # servers = ["{'name': 'alpha'}"] -- which is valid TOML that parses back
+    # as a str, so nothing on either side of the write complained.
+    out = te.to_toml({"model": "m1", "servers": [{"name": "alpha"}, {"name": "beta"}]})
+    assert out == (
+        'model = "m1"\n'
+        "\n"
+        "[[servers]]\n"
+        'name = "alpha"\n'
+        "\n"
+        "[[servers]]\n"
+        'name = "beta"\n'
+    )
+
+
+def test_toml_array_of_tables_carries_its_own_sub_tables():
+    # A sub-table declared after [[servers]] belongs to that element, so the
+    # element's body is just an ordinary table under a doubled header.
+    out = te.to_toml({"servers": [{"name": "alpha", "tls": {"verify": True}}]})
+    assert out == (
+        "[[servers]]\n"
+        'name = "alpha"\n'
+        "\n"
+        "[servers.tls]\n"
+        "verify = true\n"
+    )
+
+
+def test_toml_falls_back_to_inline_tables_for_a_mixed_list():
+    # An array of tables cannot express a list that is not all mappings, so the
+    # whole list stays inline -- still a mapping, not a stringified one.
+    out = te.to_toml({"items": [1, {"a": 2}, "x"]})
+    assert out == 'items = [1, {a = 2}, "x"]\n'
+
+
 def test_as_yaml_renders_block_style_in_declaration_order():
     cfg = _resolve("""
         pid: "navigator"
@@ -396,6 +433,13 @@ ROUND_TRIP_CASES = {
     "deep nest": {"a": {"b": {"c": {"x": 1}}}},
     "empty pruned": {"keep": "v", "drop": "", "gone": None, "hollow": {}},
     "unicode": {"s": "café — ✓"},
+    "table array": {"servers": [{"name": "alpha"}, {"name": "beta"}]},
+    "table array after scalars": {"model": "m1", "servers": [{"name": "alpha"}]},
+    "table array with sub-table": {"servers": [{"name": "a", "tls": {"verify": True}}]},
+    "nested table arrays": {"a": [{"b": [{"c": 1}]}]},
+    "empty table array element": {"servers": [{}]},
+    "mixed list": {"items": [1, {"a": 2}, "x"]},
+    "inline table quoting": {"items": [0, {"odd key": 'a"b'}]},
 }
 
 
