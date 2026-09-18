@@ -68,10 +68,7 @@ All notable changes to this project are documented here. The format follows
   the key check passed and the agent still failed. Each dialect now carries its own verification
   settings, so the protocol checked is the protocol spoken.
 - A list of mappings now renders as a TOML array of tables, not a quoted repr.
-- A persona with no token (`token: None`) set up cleanly and then refused to start. `auth_var` was
-  declared with no key behind it, so Codex named an `env_key` nothing assigns and Claude Code found
-  its token variable unset; only Goose was unaffected. Setup reported success either way, so the
-  failure surfaced at first invocation.
+- A persona with no token (None) set up cleanly but couldn't start.
 
 ## [0.0.3.dev1] — 2026-09-14
 
