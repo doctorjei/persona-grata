@@ -11,10 +11,6 @@ agent_desc: "{{pid}}-{{hid}}"                    # Agent (persona + harness) dis
                                                  #   the installed wrapper's command name
 path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
 auth_var: "API_KEY"                              # Env. variable holding key/token
-auth_placeholder: ""                             # Stand-in for `auth_var` when the persona has no
-                                                 #   token, for a harness that refuses to start
-                                                 #   unless the variable is set -- key or no key.
-                                                 #   Empty (the default) means "needs no stand-in".
 path_var: ""                                     # Store var., harness config path (default: none)
 wrapper_env: {}                                  # Extra env. vars exported by the shell wrapper,
                                                  #   for harnesses configured by environment rather
@@ -30,14 +26,13 @@ protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"   # Negotiate
 ### an empty protocol -- it cannot function. The pairing is refused by name before resolution
 ### rather than left to fail as an unresolvable template.
 
-### `auth_var` and `auth_placeholder` are settled against the persona before resolution, and only
-### one of them ever survives: with a token, the stand-in is cleared so it cannot shadow the real
-### key; with no token, `auth_var` is cleared so nothing declares a variable that will never be
-### set. Both clear to "" rather than to None -- a reference to None renders as the *string*
-### "None", which survives pruning and emits the very thing this is avoiding.
+### `auth_var` is settled against the persona before resolution. With no token it is cleared to ""
+### -- not to None, which renders as the *string* "None" and survives pruning -- so nothing
+### declares a variable that will never be set: codex renders it as `env_key` and would refuse to
+### start against a name the wrapper is guaranteed not to assign.
 ###
-### A harness opts in by *referencing* `{{auth_placeholder}}` wherever its own config puts
-### environment variables -- claude does, inside `config_store.env`. That placement is the
-### preset's knowledge, not the code's, which is why this is a value to reference rather than a
-### boolean for the code to act on: there is no config shape common to claude, codex and goose
-### that the code could inject into.
+### The converse case needs no setting. A harness that will not start unless the variable is set,
+### key or no key, writes a stand-in straight into its own `config_store.env` (claude does); that
+### entry is dropped whenever the persona *does* have a token, so it can never shadow the real key
+### the wrapper exports. The preset says where, the persona says whether -- and "whether" is
+### already `token`, so there is nothing new to declare.

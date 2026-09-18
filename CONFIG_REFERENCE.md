@@ -186,22 +186,6 @@ Path to custom harness settings files.
 
 Env. variable holding key/token.
 
-### `auth_placeholder` -> `str`
-- Required: **No**
-- Default: `""`
-
-Stand-in value for `auth_var` when the persona has no token, for a harness that refuses to start
-unless that variable is set — key or no key. Empty, the default, means no stand-in is needed.
-
-A harness opts in by referencing `{{auth_placeholder}}` wherever its own configuration carries
-environment variables; `claude` does, since Claude Code will not start without
-`ANTHROPIC_AUTH_TOKEN` even against an endpoint that needs no key. Exactly one of the two settings
-survives: with a token, the stand-in is cleared so it cannot shadow the real key the wrapper
-exports; with no token, `auth_var` is cleared so nothing names a variable that will never be set.
-
-The value must not be one your configuration would read back as unset — `none` and `null` both
-mean "unset" wherever they appear, so either would prune away to nothing.
-
 ### `path_var` -> `str`
 - Required: **No**
 - Default: `""`

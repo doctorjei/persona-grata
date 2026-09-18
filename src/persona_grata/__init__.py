@@ -350,35 +350,42 @@ def _drop_disabled(config):
 
 
 def _settle_auth(config):
-    """Settle ``auth_var`` against ``auth_placeholder``; exactly one survives.
+    """Reconcile each harness's auth variable with whether the persona has a key.
 
-    ``auth_var`` names the environment variable a key travels in;
-    ``auth_placeholder`` is a stand-in for harnesses that refuse to start unless
-    that variable is set, key or no key. Which one applies is a fact about the
-    *persona* (has it a token?), while where it goes is a fact about the
-    *harness* -- so this settles the values and the presets do the placing.
+    ``token`` already says whether there is a key, so nothing new is declared
+    for it; this only makes the harness agree with that answer. The persona says
+    *whether*, the preset says *where*.
 
-    With **no token**, ``auth_var`` is cleared. Naming a variable nothing will
-    set is actively harmful: codex renders it into its provider table as
-    ``env_key`` and then refuses to start with ``Missing environment variable``,
-    while the wrapper -- correctly -- omits the assignment precisely because
-    there is no token to read. Setup reports success and the agent cannot run.
+    **No token:** ``auth_var`` is cleared. Naming a variable nothing will set is
+    actively harmful -- codex renders it into its provider table as ``env_key``
+    and then refuses to start with ``Missing environment variable``, while the
+    wrapper (correctly) omits the assignment precisely because there is no token
+    to read. Setup reports success and the agent cannot run.
 
-    With **a token**, the stand-in is cleared instead, so it can never shadow the
-    real key the wrapper exports.
+    **A token:** any stand-in the harness wrote into its own ``config_store.env``
+    is dropped, so it cannot shadow the real key the wrapper exports. Claude Code
+    needs such a stand-in because it will not start with the variable unset, key
+    or no key; a harness that does not need one simply has no such entry and
+    this does nothing.
 
-    Both clear to ``""`` so the existing prune rule removes them. ⚑ Not to
-    ``None``: a reference to ``None`` renders as the literal string ``"None"``,
-    which survives pruning and emits exactly what this avoids. ``""`` is the
-    schema's own spelling for an unset scalar (``path_var``, ``mind.model_1``).
+    ⚑ Cleared to ``""``, never ``None``: a reference to ``None`` renders as the
+    literal string ``"None"``, which survives pruning and emits the very thing
+    being avoided. ``""`` is the schema's own spelling for an unset scalar
+    (``path_var``, ``mind.model_1``).
     """
     for persona in _ensure_dict(config, "personas").values():
         if not isinstance(persona, dict):
             continue
-        spent = "auth_placeholder" if persona.get("token") else "auth_var"
+        has_token = bool(persona.get("token"))
         for harness in (persona.get("harnesses") or {}).values():
-            if isinstance(harness, dict):
-                harness[spent] = ""
+            if not isinstance(harness, dict):
+                continue
+            if not has_token:
+                harness["auth_var"] = ""
+                continue
+            env = (harness.get("config_store") or {}).get("env")
+            if isinstance(env, dict):
+                env.pop(harness.get("auth_var"), None)
     return config
 
 

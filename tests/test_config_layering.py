@@ -681,9 +681,10 @@ def test_a_tokenless_persona_clears_auth_var_on_every_harness(tmp_path):
 def test_a_tokenless_claude_gets_a_stand_in_auth_token(tmp_path):
     """Claude Code refuses to start without the variable set, key or no key.
 
-    It checks presence, not validity, so a stand-in is enough -- but it must be
-    a value the loader will not read back as "unset". ``none`` and ``null`` are
-    both in ``_UNSET_TOKENS`` and would prune straight back out.
+    It checks presence, not validity, so the stand-in the preset writes into its
+    own env map is enough -- but it must be a value the loader will not read back
+    as "unset". ``none`` and ``null`` are both in ``_UNSET_TOKENS`` and would
+    prune straight back out, which is the bug this whole change is about.
     """
     cfg = pg.load_config(write(tmp_path, """
         personas:
@@ -707,8 +708,8 @@ def test_a_stand_in_never_shadows_a_real_token(tmp_path):
               endpoint: "https://api.test.com"
     """))
     claude = cfg["personas"]["test_user"]["harnesses"]["claude"]
-    assert claude["auth_placeholder"] == ""
     assert "ANTHROPIC_AUTH_TOKEN" not in json.loads(claude["content"])["env"]
+    assert claude["auth_var"] == "ANTHROPIC_AUTH_TOKEN"   # still named, for the wrapper
 
 
 def test_a_persona_with_a_token_keeps_its_auth_var(tmp_path):
