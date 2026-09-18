@@ -67,6 +67,7 @@ All notable changes to this project are documented here. The format follows
   Responses. Against an endpoint serving both, this was invisible; against one serving only Chat,
   the key check passed and the agent still failed. Each dialect now carries its own verification
   settings, so the protocol checked is the protocol spoken.
+- A list of mappings now renders as a TOML array of tables, not a quoted repr.
 
 ## [0.0.3.dev1] — 2026-09-14
 
