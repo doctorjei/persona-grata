@@ -68,6 +68,7 @@ All notable changes to this project are documented here. The format follows
   the key check passed and the agent still failed. Each dialect now carries its own verification
   settings, so the protocol checked is the protocol spoken.
 - A list of mappings now renders as a TOML array of tables, not a quoted repr.
+- A harness switched off in a config was still offered; naming it did nothing.
 
 ## [0.0.3.dev1] — 2026-09-14
 

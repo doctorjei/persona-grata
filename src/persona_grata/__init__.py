@@ -358,8 +358,16 @@ def _expand_ids(preset_entries, declared, known):
     built tree cannot drift) and for the dialects seeded into ``mind.dialects``.
     """
     ids = dict.fromkeys(list(known) + list(preset_entries) + list(declared or {}))
-    return [name for name in ids
-            if not (name in preset_entries and preset_entries[name] is None)]
+    # Read both sources in layer order, most specific last, the way everything
+    # else here does. Checking only the preset broke that twice: a harness the
+    # *user* switched off stayed on this list while `_drop_disabled` removed it
+    # from the built tree, so naming one passed validation and then set nothing
+    # up -- and a harness the *preset* switched off could not be turned back on,
+    # its block surviving with no defaults layered under it.
+    state = {}
+    for source in (preset_entries, declared or {}):
+        state.update(source)
+    return [name for name in ids if state.get(name, {}) is not None]
 
 
 def harness_names(pid, path=None, env_defaults=None, overrides=None):
@@ -1610,7 +1618,11 @@ def main(argv=None):
         available = harness_names(pid, config_path, overrides=overrides)
         for hid in chosen_harnesses:
             if hid not in available:
-                sys.exit(f"Error: harness '{hid}' is not configured for persona '{pid}'. "
+                # Both reasons in one line, deliberately not distinguished: the
+                # remedy is the same either way, and the Available list below
+                # already says what there is.
+                sys.exit(f"Error: harness '{hid}' is off, or no such harness, "
+                         f"for persona '{pid}'. "
                          f"Available: {', '.join(available) or 'none'}")
         targets[pid] = list(chosen_harnesses) or None
         available_by_pid[pid] = available
@@ -1632,6 +1644,13 @@ def main(argv=None):
     # the caller did not name is reported by load_config and left out here.
     for pid in targets:
         selected = list(((config.get("personas") or {}).get(pid) or {}).get("harnesses") or {})
+        # Asked for harnesses and built none: say so rather than exiting 0 in
+        # silence. Hard to reach now that the structural view honours a switched
+        # -off harness -- which is the point. A command that does nothing should
+        # never look like one that worked.
+        if not selected:
+            sys.exit(f"Error: nothing to {'remove' if removing else 'set up'} for persona "
+                     f"'{pid}': it has no harnesses configured.")
         for hid in selected:
             if removing:
                 remove_harness(pid, hid, config)

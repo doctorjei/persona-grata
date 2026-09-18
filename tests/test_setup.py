@@ -1212,3 +1212,64 @@ def test_ask_ends_the_interview_on_eof(monkeypatch):
     monkeypatch.setattr("builtins.input", eof)
     with pytest.raises(SystemExit):
         pg._ask("Persona name")
+
+
+SWITCHED_OFF = """
+personas:
+  orion:
+    persona_desc: "Orion Toolkit"
+    mind:
+      endpoint: "https://api.cybertron.space"
+      model: "alpha-3-on"
+    harnesses:
+      goose: None
+"""
+
+
+def test_naming_a_switched_off_harness_is_refused(home):
+    # Regression: it used to pass validation (the structural view ignored the
+    # user's None) and then set nothing up -- no output, exit 0.
+    path = home / "agents.yaml"
+    path.write_text(SWITCHED_OFF)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([str(path), "orion", "goose"])
+    message = str(exit_info.value)
+    assert "is off, or no such harness" in message
+    # The list must not offer what it just refused.
+    assert "goose" not in message.split("Available:")[1]
+
+
+def test_removing_a_switched_off_harness_is_refused(home):
+    # The one that lost data: the wrapper and the config directory stayed put
+    # while the command reported nothing and exited 0, so a user had every
+    # reason to believe the agent was gone.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main([str(path), "orion", "goose"])                  # install it first
+    assert (home / ".config" / "personas" / "orion" / "goose").is_dir()
+
+    path.write_text(SWITCHED_OFF)                           # now switch it off
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(["--remove", str(path), "orion", "goose"])
+    assert "is off, or no such harness" in str(exit_info.value)
+    # Still there -- refusing is the point; it must not half-remove either.
+    assert (home / ".config" / "personas" / "orion" / "goose").is_dir()
+
+
+def test_a_persona_with_every_harness_off_is_refused(home):
+    # The empty-build guard. Nothing is named here, so validation has nothing
+    # to check; without the guard this exits 0 in silence.
+    path = home / "agents.yaml"
+    path.write_text("""
+personas:
+  orion:
+    mind:
+      endpoint: "https://api.cybertron.space"
+    harnesses:
+      claude: None
+      codex: None
+      goose: None
+""")
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main([str(path), "orion"])
+    assert "no harnesses configured" in str(exit_info.value)

@@ -1,6 +1,7 @@
 """Layered-configuration assembly: defaults -> presets -> user overrides."""
 
 import json
+import shutil
 
 import pytest
 import yaml
@@ -393,6 +394,50 @@ def test_harness_names_reports_without_building(tmp_path):
               apex: {auth_var: "APEX_KEY"}
     """)
     assert "apex" in pg.harness_names("custom", path)
+
+
+def test_harness_names_honours_a_harness_the_user_switched_off(tmp_path):
+    # Regression: `_expand_ids` consulted only the persona preset's entries, so
+    # a harness the USER switched off stayed on this list while `_drop_disabled`
+    # removed it from the built tree. The CLI validates names against this list,
+    # so `pg <cfg> orion goose` passed validation and then set nothing up --
+    # and `pg -r <cfg> orion goose` reported nothing while removing nothing.
+    path = write(tmp_path, """
+        personas:
+          orion:
+            mind:
+              endpoint: "https://api.test.com"
+            harnesses:
+              goose: None
+    """)
+    assert "goose" not in pg.harness_names("orion", path)
+    # The structural view and the built tree are one answer, which is the whole
+    # reason `_expand_ids` is shared between them.
+    built = pg.load_config(path, targets={"orion": None})
+    assert "goose" not in built["personas"]["orion"]["harnesses"]
+    assert sorted(built["personas"]["orion"]["harnesses"]) == \
+        sorted(pg.harness_names("orion", path))
+
+
+def test_a_user_can_turn_a_harness_the_preset_switched_off_back_on(tmp_path, monkeypatch):
+    # The other half of reading both sources in layer order. No shipped preset
+    # switches a harness off, so this is reachable only through a user-authored
+    # one -- but the layering promises most-specific-wins, and before this the
+    # preset's None was final: the harness was never built, while the user's
+    # block survived pruning with no defaults under it.
+    data = tmp_path / "data"
+    shutil.copytree(pg.DATA_DIR, data)                # the real schema, plus one
+    (data / "persona.edge.yaml").write_text("edge:\n  harnesses:\n    goose: None\n")
+    monkeypatch.setattr(pg, "DATA_DIR", data)
+
+    off = tmp_path / "off.yaml"
+    off.write_text('personas:\n  edge:\n    mind:\n      endpoint: "https://api.test.com"\n')
+    assert "goose" not in pg.harness_names("edge", str(off))
+
+    on = tmp_path / "on.yaml"
+    on.write_text('personas:\n  edge:\n    mind:\n      endpoint: "https://api.test.com"\n'
+                  '    harnesses:\n      goose: {auth_var: "GOOSE_KEY"}\n')
+    assert "goose" in pg.harness_names("edge", str(on))
 
 
 def test_missing_config_file_exits():
