@@ -165,6 +165,43 @@ def test_zsh_users_get_zshrc(home, monkeypatch):
     assert not (home / ".bashrc").exists()
 
 
+@pytest.mark.parametrize("shell", ["/bin/ash", "/bin/dash", "/usr/bin/busybox"])
+def test_ash_family_users_get_profile(home, monkeypatch, shell):
+    # ash and dash have no rc file of their own: a LOGIN shell reads ~/.profile,
+    # and an interactive non-login one reads whatever $ENV names, or nothing.
+    # Measured on busybox ash. So .profile is the file that carries.
+    monkeypatch.setenv("SHELL", shell)
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    assert (home / ".profile").exists()
+    assert not (home / ".bashrc").exists()
+    subprocess.run(["bash", "-n", str(home / ".profile")], check=True)
+
+
+def test_bash_is_not_mistaken_for_ash(home, monkeypatch):
+    # "ash" is a substring of "bash"; matching $SHELL that way sent every bash
+    # user to .profile. The match is on the basename, not the whole path.
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    assert (home / ".bashrc").exists()
+    assert not (home / ".profile").exists()
+
+
+@pytest.mark.parametrize("shell", ["/usr/bin/fish", "/bin/tcsh", "/usr/local/bin/mksh"])
+def test_an_unrecognised_shell_is_reported(home, monkeypatch, capsys, shell):
+    # It used to be silent: .bashrc was written for everything that was not zsh,
+    # so the user was told setup succeeded and then had no such command.
+    monkeypatch.setenv("SHELL", shell)
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    assert shell in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("shell", ["/bin/bash", "/usr/bin/zsh", "/bin/ash", "/bin/sh"])
+def test_a_supported_shell_is_not_warned_about(home, monkeypatch, capsys, shell):
+    monkeypatch.setenv("SHELL", shell)
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    assert "does not know how to" not in capsys.readouterr().out
+
+
 def test_existing_token_is_kept(home):
     cfg = config(home, BASIC)
     store = home / ".config" / "personas" / "orion"
@@ -359,6 +396,46 @@ def test_remove_persona_store_deletes_the_token(home):
 
     pg.remove_persona_store("orion", cfg)
     assert not store.exists()
+
+
+def test_an_emptied_persona_directory_is_dropped(home):
+    # An empty store directory still reads as the persona existing (_in_store
+    # asks only whether the directory is there), so leaving one behind refused
+    # the next --create for a persona the user had just removed and could not
+    # see. Found while re-testing a tokenless persona by hand.
+    cfg = config(home, NO_TOKEN)
+    pg.setup_harness("orion", "claude", cfg)
+    store = home / ".config" / "personas" / "orion"
+    assert store.is_dir()
+
+    pg.remove_harness("orion", "claude", cfg)
+    assert pg._remove_empty_store("orion", cfg) is True
+    assert not store.exists()
+
+
+def test_a_directory_still_holding_a_token_is_kept(home):
+    # The counterpart: declining to delete the token must leave the directory
+    # alone, so the cleanup has to be conditional on the directory being empty
+    # rather than on every harness having gone.
+    cfg = config(home, BASIC)
+    pg.setup_harness("orion", "claude", cfg)
+    store = home / ".config" / "personas" / "orion"
+
+    pg.remove_harness("orion", "claude", cfg)
+    assert pg._remove_empty_store("orion", cfg) is False
+    assert (store / "token").exists()
+
+
+def test_a_tokenless_persona_has_no_token_to_offer(home):
+    cfg = config(home, NO_TOKEN)
+    pg.setup_harness("orion", "claude", cfg)
+    assert pg._has_stored_token("orion", cfg) is False
+
+
+def test_a_persona_with_a_key_does_have_one(home):
+    cfg = config(home, BASIC)
+    pg.setup_harness("orion", "claude", cfg)
+    assert pg._has_stored_token("orion", cfg) is True
 
 
 @pytest.mark.parametrize("target", ["home", "root"])

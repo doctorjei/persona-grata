@@ -1013,10 +1013,59 @@ def setup_harness(persona_id, harness_id, config, key=None, name=None):
       config_dir, token_path, path_var, auth_var, wrapper_env, agent_desc, name)
 
 
+#: Shells whose startup file is not `.bashrc`, keyed by the BASENAME of `$SHELL`.
+#: ⚠️ Not a substring test: "ash" is a substring of "bash", so matching that way
+#: sends every bash user to `.profile`.
+#:
+#: ⚑ ash/dash read `~/.profile` only as a LOGIN shell. Interactive non-login they
+#: read the file `$ENV` names, and NOTHING if it is unset -- measured on busybox
+#: ash, which sources `.profile` for `-l` and nothing otherwise. There is no
+#: `.ashrc` convention to write to, so `.profile` is the file that carries, and
+#: the usual way `$ENV` gets set at all is from `.profile` itself.
+#:
+#: Bare `sh` is deliberately absent, so it still falls through to `.bashrc` as it
+#: always has. Its identity cannot be read off the name -- Debian points it at
+#: bash, Alpine at busybox -- and changing where an existing `sh` user's wrapper
+#: lands would be a behaviour change rather than added support.
+_RC_FILES = {
+    "zsh": ".zshrc",
+    "ash": ".profile",
+    "dash": ".profile",
+    "busybox": ".profile",
+}
+
+
 def _rc_file():
-    """The shell rc file this user's login shell reads."""
+    """The shell rc file this user's login shell reads.
+
+    Falls back to `.bashrc`, which is right for bash and wrong-but-harmless for
+    an unrecognised shell -- see `_unsupported_shell` for how that is reported.
+    """
     shell = os.environ.get("SHELL", "/bin/bash")
-    return Path.home() / (".zshrc" if "zsh" in shell else ".bashrc")
+    return Path.home() / _RC_FILES.get(os.path.basename(shell), ".bashrc")
+
+
+#: Shells the wrapper is known to work in, again by basename. Anything else gets
+#: a warning rather than a refusal: the wrapper is plain POSIX shell function
+#: syntax, so it very likely works -- what cannot be guessed is which file the
+#: shell reads.
+_KNOWN_SHELLS = frozenset({"bash", "sh", *_RC_FILES})
+
+
+def _unsupported_shell():
+    """The `$SHELL` value if it is one we cannot place a wrapper for, else None.
+
+    Silence here used to be the failure: `.bashrc` was written for *everything*
+    that was not zsh, so a fish or csh user was told setup succeeded and then had
+    no such command. The classifier says POSIX, which is broader than bash/zsh --
+    but fish and csh are not POSIX shells at all.
+    """
+    shell = os.environ.get("SHELL", "")
+    if not shell or os.path.basename(shell) in _KNOWN_SHELLS:
+        return None
+    return shell
+
+
 
 
 def _strip_wrapper(content, persona_id, harness_id, persona_desc=None, harness_desc=None):
@@ -1081,6 +1130,17 @@ def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
     print("-----------")
     print(f"1. Before use, open a new terminal or run `source {rc_file}`.")
     print(f"2. Running {harness_id} still uses its native models (settings unchanged).\n")
+    stray = _unsupported_shell()
+    if stray:
+        print(f"⚠ Your $SHELL is {stray}, which persona-grata does not know how to")
+        print(f"   configure. The wrapper was written to {rc_file} anyway; if that shell")
+        print("   does not read it, source it yourself or move the block. The wrapper is")
+        print("   POSIX shell function syntax, so a POSIX shell will run it.\n")
+    elif rc_file.name == ".profile":
+        print(f"⚠ {rc_file.name} is read by a LOGIN shell. If you start this shell")
+        print("   non-login, set ENV to a file that sources it, which is how ash and dash")
+        print("   find startup files at all:\n")
+        print(f'       ENV="$HOME/{rc_file.name}"; export ENV\n')
     print(f"To run {agent_desc} ({persona_desc} with {harness_desc})")
     print("----------------------------------------------------------------------------")
     print(f"> {cmd_name}\n")
@@ -1159,6 +1219,36 @@ def remove_persona_store(persona_id, config):
     if not persona.get("path"):
         return False
     return _remove_tree(_path(persona["path"]), "persona directory (including token)")
+
+
+def _has_stored_token(persona_id, config):
+    """Whether this persona actually has a key on disk to be asked about."""
+    persona = (config.get("personas") or {}).get(persona_id) or {}
+    token = persona.get("token")
+    return bool(token) and _path(token).exists()
+
+
+def _remove_empty_store(persona_id, config):
+    """Drop the persona directory once it holds nothing.
+
+    An empty store directory still reads as the persona existing -- ``_in_store``
+    asks only whether the directory is there -- so leaving one behind refuses the
+    next ``--create`` for a persona the user just removed and cannot see. Kept
+    separate from :func:`remove_persona_store`, which deletes a directory that
+    still has a token in it and therefore has to be asked about first.
+    """
+    persona = (config.get("personas") or {}).get(persona_id) or {}
+    path = persona.get("path")
+    if not path:
+        return False
+    target = _path(path)
+    if not target.is_dir() or any(target.iterdir()):
+        return False
+    if _too_dangerous_to_remove(target):
+        return False
+    target.rmdir()
+    print(f" - Removed the now-empty persona directory {target}.")
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -1699,10 +1789,18 @@ def main(argv=None):
                 setup_harness(pid, hid, config, key, agent_name)
 
         # Once nothing is left wired up, the token is the only thing still on
-        # disk -- ask, since deleting it means pasting the key again.
+        # disk -- ask, since deleting it means pasting the key again. A persona
+        # that never had one is not asked about: there is nothing to keep, and
+        # the prompt named a file that does not exist.
         if removing and set(selected) >= set(available_by_pid[pid]):
-            if _confirm(f"Also remove {pid}'s stored API token?"):
+            if _has_stored_token(pid, config) and _confirm(
+                    f"Also remove {pid}'s stored API token?"):
                 remove_persona_store(pid, config)
+            # Whatever was decided above, do not leave an empty directory: it
+            # still counts as the persona existing, so the next --create is
+            # refused for something the user just removed. Declining the token
+            # leaves the directory non-empty, so this is then a no-op.
+            _remove_empty_store(pid, config)
 
     # The interview's offer to keep the definition, written only once the setup
     # it describes has actually succeeded. (--export never reaches here; it is a
