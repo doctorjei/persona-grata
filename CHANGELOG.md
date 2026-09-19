@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.3] — 2026-09-19
+
 ### Added
 
 - Dialects: the wire protocol an endpoint speaks, declared on both sides and negotiated between
@@ -78,13 +80,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.0.3.dev1] — 2026-09-14
 
-A development snapshot of everything listed under [Unreleased] above, published so the dialect,
+A development snapshot of everything listed under [0.0.3] above, published so the dialect,
 designation and naming work can be installed and exercised before 0.0.3 is settled. It is a
 pre-release, so `pip install persona-grata` does not select it; use `pip install --pre`.
 
 **It carries breaking changes.** A hand-written agents.yaml needs `supported_dialects` on every
 harness, has no `base_uri` or harness-level `verify` to set, and may not use a name containing `.`
-or `/`. See Changed and Fixed under [Unreleased] for the migration in each case.
+or `/`. See Changed and Fixed under [0.0.3] for the migration in each case.
 
 ## [0.0.2] — 2026-09-10
 
@@ -191,6 +193,8 @@ First release.
   permissions and referenced by path via a `.secret_path` file.
 - Shell wrapper installation into `.bashrc` / `.zshrc`, launched as `<persona>-<harness>`.
 
+[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/doctorjei/persona-grata/compare/v0.0.2...v0.0.3
 [0.0.3.dev1]: https://pypi.org/project/persona-grata/0.0.3.dev1/
 [0.0.2]: https://github.com/doctorjei/persona-grata/commits/main/
 [0.0.1]: https://pypi.org/project/persona-grata/0.0.1/
