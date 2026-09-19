@@ -616,6 +616,88 @@ def test_every_shipped_harness_renders_a_parseable_config_file():
             parse(content)          # raises -> the preset ships a broken config
 
 
+# --------------------------------------------------------------------------- #
+# Properties of every generated config
+# --------------------------------------------------------------------------- #
+# Nothing automated covered a *generated* config until now, so the `--no-token`
+# bug shipped invisibly: every file was well-formed, and the one that could not
+# start was textually unremarkable. These assert classes rather than instances,
+# over every shipped persona-and-harness pair.
+def _generated():
+    """Every shipped pairing that renders a config file, parsed."""
+    tomllib = pytest.importorskip("tomllib")
+    parsers = {".toml": tomllib.loads, ".yaml": yaml.safe_load, ".json": json.loads}
+    cfg = pg.load_config()
+    for pid, persona in cfg["personas"].items():
+        for hid, harness in persona["harnesses"].items():
+            content, config_file = harness["content"], harness["config_file"]
+            if not (content and config_file):
+                continue
+            parse = parsers.get(config_file[config_file.rfind("."):], json.loads)
+            yield pid, hid, persona, harness, content, parse(content)
+
+
+def _scalars(node):
+    """Every scalar in a parsed config, as (key, value) -- key None inside lists."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(value, (dict, list)):
+                yield from _scalars(value)
+            else:
+                yield key, value
+    elif isinstance(node, list):
+        for item in node:
+            yield from _scalars(item)
+
+
+def test_no_generated_config_holds_an_unresolved_template():
+    for pid, hid, _, _, content, _ in _generated():
+        assert "{{" not in content and "}}" not in content, f"{pid}+{hid}"
+
+
+def test_no_generated_config_emits_the_none_sentinel():
+    # This class has bitten twice: `env_key = "None"` from clearing a value to
+    # None rather than "", and a stand-in written as `none`, which the loader
+    # reads back as unset. A literal "None" in a shipped config is always a bug.
+    for pid, hid, _, _, _, parsed in _generated():
+        for key, value in _scalars(parsed):
+            assert value != "None", f"{pid}+{hid}: {key}"
+            assert str(value).strip().lower() not in pg._UNSET_TOKENS or value in (0, False), \
+                f"{pid}+{hid}: {key} = {value!r} reads back as unset"
+
+
+def test_auth_var_is_set_exactly_when_the_persona_has_a_token():
+    cfg = pg.load_config()
+    for pid, persona in cfg["personas"].items():
+        for hid, harness in persona["harnesses"].items():
+            assert bool(harness["auth_var"]) == bool(persona["token"]), f"{pid}+{hid}"
+
+
+def test_a_tokenless_config_never_names_an_auth_variable_as_a_value():
+    """The `--no-token` bug, as a property.
+
+    A config may CONTAIN the auth variable's name as a key with a value -- that
+    is a stand-in being supplied, which claude needs. What it must never do is
+    carry the name as a VALUE, which declares "the key is waiting in this
+    variable" for a variable the wrapper is guaranteed not to assign.
+    """
+    cfg = pg.load_config()
+    # The name each harness would use, taken from a persona that has a token.
+    names = {hid: h["auth_var"]
+             for p in cfg["personas"].values() if p["token"]
+             for hid, h in p["harnesses"].items() if h["auth_var"]}
+    assert names, "no token-bearing persona ships, so this would be vacuous"
+
+    checked = 0
+    for pid, hid, persona, _, _, parsed in _generated():
+        if persona["token"] or hid not in names:
+            continue
+        for key, value in _scalars(parsed):
+            assert value != names[hid], f"{pid}+{hid}: {key} = {value!r}"
+        checked += 1
+    assert checked, "no tokenless pairing was exercised"
+
+
 def test_codex_toml_provider_table_matches_model_provider():
     tomllib = pytest.importorskip("tomllib")
     cfg = pg.load_config()

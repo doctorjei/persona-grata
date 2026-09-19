@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format follows
 - `__MATCH_FIRST__(key_set, items)` returns the first member of `key_set` that appears among
   `items`' keys, reading the list as a preference order. Unlike a serializer it is the whole
   reference rather than the end of one, and its arguments may resolve to containers.
+- A subscript may be written as a literal integer: `{{rows[1]}}` is position 1, `{{rows[-1]}}` the
+  last. Previously only a reference could index a list.
+- ash and dash are supported: their wrapper goes in `~/.profile`. An unrecognised `$SHELL` is now
+  reported rather than silently given `.bashrc`.
 
 ### Changed
 
@@ -69,6 +73,8 @@ All notable changes to this project are documented here. The format follows
   settings, so the protocol checked is the protocol spoken.
 - A list of mappings now renders as a TOML array of tables, not a quoted repr.
 - A persona with no token (None) set up cleanly but couldn't start.
+- `--remove` left an empty persona directory behind, which then refused `--create`.
+- An out-of-range list index crashed with a `KeyError` instead of failing as a template error.
 
 ## [0.0.3.dev1] — 2026-09-14
 
