@@ -92,8 +92,8 @@ orion:
 
 ## Adding & Removing Harnesses
 
-Every known harness is configured for a persona in addition to those you list. To switch one off,
-set it to `None`:
+Every known harness the persona can talk to is configured in addition to those you list; one that
+shares no dialect with it is skipped. To switch a harness off, set it to `None`:
 
 ```
 personas:
@@ -152,8 +152,9 @@ personas:
 ```
 
 Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key
-is visible rather than silent. Persona and harness _names_ are yours to choose and are never
-checked, and `config_store` is free-form harness data that is passed through untouched.
+is visible rather than silent. Persona, harness, and dialect _names_ are yours to choose, but they
+may contain only letters and digits (in any language), `-`, and `_`; `default` is reserved.
+`config_store` is free-form harness data that is passed through untouched.
 
 ## Resources
 

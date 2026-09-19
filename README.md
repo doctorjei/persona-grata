@@ -180,7 +180,7 @@ _Removes the Codex CLI agent for kimi, leaving Claude Code and the stored token 
 
 `pg --remove kimi`
 
-_Removes every kimi harness, then asks whether to delete the stored API token._
+_Removes every kimi harness, then asks whether to delete the stored API token, if there is one._
 
 ### Interaction
 
@@ -191,6 +191,9 @@ terminal, you can launch the agent:
 ```bash
 <persona>-<harness> [arguments]
 ```
+
+A `$SHELL` persona-grata doesn't recognise is reported, not assumed; the wrapper is written in
+plain POSIX shell syntax, so any _POSIX_ shell will run it.
 
 ### Parameters Summary
 
@@ -206,6 +209,7 @@ terminal, you can launch the agent:
 | `-i`, `--interactive` | Ask for whatever is not given above; offers to save the result |
 | `--token FILE` | Read the API key from `FILE` rather than prompting for it^ |
 | `--name NAME` | Call this agent `NAME`, and install it as the command `NAME` |
+| `--remove`, `-r` | Remove the named agent(s); offers to delete the token |
 
 _*If the `--no-token` flag is not included, connections to keyless-only servers will fail._
 
@@ -228,7 +232,8 @@ Persona-Grata supports a dynamic variable resolution system via `{{variable}}` s
   render a whole subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
 - **Subscripts**: any segment may be indexed by another reference, resolved where the template is
   written rather than where it points (e.g., `{{providers[chosen].url}}` is "the entry of
-  `providers` named by *my* `chosen`"). Subscripts chain, and index lists by position.
+  `providers` named by *my* `chosen`"). Subscripts chain, and index lists by position — `[1]`,
+  `[-1]` included.
 - **Functions**: a reference may instead *be* a call, `{{__NAME__(arg, ...)}}`, whose arguments are
   themselves references. `__MATCH_FIRST__(key_set, items)` yields the first member of `key_set`
   found among `items`' keys, reading the list as a preference order.
