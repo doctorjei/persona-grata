@@ -555,6 +555,30 @@ def test_a_literal_zero_subscript_indexes_the_first_entry():
     """)["v"] == "b"
 
 
+def test_a_literal_negative_subscript_counts_from_the_end():
+    # A *referenced* subscript has always done Python's negative indexing, so
+    # accepting the literal spelling makes the two agree rather than granting
+    # anything new. Ruled by the maintainer: "just accept negatives".
+    resolved = _resolve("""
+        i: -1
+        xs: [a, b, c]
+        last_literal: "{{xs[-1]}}"
+        last_ref: "{{xs[i]}}"
+        first_from_end: "{{xs[-3]}}"
+    """)
+    assert resolved["last_literal"] == "c"
+    assert resolved["last_ref"] == resolved["last_literal"]   # the two spellings agree
+    assert resolved["first_from_end"] == "a"
+
+
+def test_a_negative_index_past_the_start_still_fails():
+    with pytest.raises(te.TemplateError):
+        _resolve("""
+            xs: [a, b]
+            v: "{{xs[-3]}}"
+        """)
+
+
 def test_an_out_of_range_index_is_a_template_error_not_a_key_error():
     # Rule 6d says an absent entry fails; it must fail as the engine's own error
     # rather than letting a bare KeyError escape from the tree walk.

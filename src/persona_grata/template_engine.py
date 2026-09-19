@@ -24,11 +24,18 @@ _ENV_RE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-
 _TMPL_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 _CALL_RE = re.compile(r"^(__[A-Za-z0-9_]+__)\((.*)\)$")
 _SUBSCRIPT_RE = re.compile(r"^([^\[\]]*)((?:\[[^\[\]]*\])*)$")
-#: A subscript written as a bare non-negative integer is that position, not a
-#: reference to an identifier of the same name. Negative forms are deliberately
-#: NOT matched: `[-1]` stays a reference, so "last element" is not quietly
-#: acquired along the way.
-_INT_SUBSCRIPT_RE = re.compile(r"^[0-9]+$")
+#: A subscript written as a bare integer is that position, not a reference to an
+#: identifier of the same name. Negatives included, so `[-1]` is the last element
+#: -- which a *referenced* subscript has always done, making the two spellings
+#: agree rather than granting anything new.
+#:
+#: ⚠️ This DOES shadow, and an earlier comment here wrongly said it could not.
+#: A quoted YAML key is a legal identifier, so a tree may hold `"1": 2`, and
+#: `{{rows[1]}}` used to mean "index by whatever `1` holds" -- rows[2], here.
+#: It now means rows[1]. Shadowing an all-digit identifier is the price of the
+#: obvious spelling working, and it is worth paying; it is not the absence of a
+#: cost.
+_INT_SUBSCRIPT_RE = re.compile(r"^-?[0-9]+$")
 
 _RESERVED = ("self", "__PARENT__", "__KEY__")
 
@@ -332,11 +339,13 @@ def _apply_subscripts(cursor, subscripts, path, root, ref):
     of the node being indexed -- ``mind.dialects[protocol]`` means "the entry of
     mind.dialects named by *my* protocol".
 
-    A bare non-negative integer is the exception: it IS the index. Treating it as
-    a reference meant ``{{rows[1]}}`` looked up an identifier named ``1``, never
-    found one, and failed -- so a list could be indexed only indirectly, through
-    a name bound to the number. Nothing is shadowed by this, since an identifier
-    made entirely of digits cannot be written as one anyway.
+    A bare integer is the exception: it IS the index, negatives included. Treating
+    it as a reference meant ``{{rows[1]}}`` looked up an identifier named ``1``,
+    almost never found one, and failed -- so a list could be indexed only
+    indirectly, through a name bound to the number.
+
+    ⚠️ An all-digit identifier *can* exist (a quoted YAML key), so this does
+    shadow one. See ``_INT_SUBSCRIPT_RE``.
     """
     for inner in re.findall(r"\[([^\[\]]*)\]", subscripts):
         inner = inner.strip()
