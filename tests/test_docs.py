@@ -246,10 +246,25 @@ def test_every_wrapper_env_fully_resolves():
 # --------------------------------------------------------------------------- #
 # Version agreement, and the declared Python floor
 # --------------------------------------------------------------------------- #
+#: A PEP 440 pre-release or development suffix, which is what makes a version
+#: a snapshot of unreleased work rather than a release.
+_PRERELEASE = re.compile(r"(\.dev\d*|(?:a|b|rc)\d*)$")
+
+
 def test_version_agrees_across_the_project():
     declared = re.search(r'^version = "([^"]+)"', read("pyproject.toml"), re.M).group(1)
     assert declared == pg.__version__, "pyproject.toml and __version__ disagree"
-    assert f"[{declared}]" in read("CHANGELOG.md"), f"CHANGELOG.md has no {declared} section"
+    # Compare against the state the version declares, not the string itself: a
+    # pre-release describes work that has not been released, so its section is
+    # [Unreleased]. Demanding a [0.0.4.dev0] heading would put a version nobody
+    # can install into the changelog, and this check would then fail for every
+    # tree between releases -- which is the shape we keep the .dev bump for.
+    expected = "Unreleased" if _PRERELEASE.search(declared) else declared
+    # Match the heading, not the string: every section also has a link
+    # definition at the foot of the file, so a bare `[0.0.3]` search passes on
+    # a changelog that links the version and documents nothing.
+    heading = re.compile(rf"^## \[{re.escape(expected)}\]", re.M)
+    assert heading.search(read("CHANGELOG.md")), f"CHANGELOG.md has no {expected} section"
 
 
 def _source_files():

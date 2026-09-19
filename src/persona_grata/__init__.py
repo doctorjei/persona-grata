@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 from . import template_engine as te
 
-__version__ = "0.0.3"
+__version__ = "0.0.4.dev0"
 
 # Default values for selected environment variables (rule 1e is "empty string";
 # these are the caller-supplied defaults the engine falls back to when a var is
