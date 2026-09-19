@@ -184,8 +184,9 @@ _Removes every kimi harness, then asks whether to delete the stored API token._
 
 ### Interaction
 
-The script automatically adds a shell wrapper to your `.bashrc` or `.zshrc`. After running setup
-and sourcing your config (`source ~/.bashrc`) or opening a new terminal, you can launch the agent:
+The script automatically adds a shell wrapper to your `.bashrc`, `.zshrc`, or `.profile`, depending
+on your shell. After running setup and sourcing your config (`source ~/.bashrc`) or opening a new
+terminal, you can launch the agent:
 
 ```bash
 <persona>-<harness> [arguments]
