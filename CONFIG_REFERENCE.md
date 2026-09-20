@@ -29,7 +29,8 @@ dialects determine which **personas** and **harnesses** can be connected / match
 
 ### `persona_store` -> `str`
 - Required: **No**
-- Default: `"$XDG_CONFIG_HOME/personas"` (`~/.config/personas` if `$XDG_CONFIG_HOME` unset/empty)
+- Default: `"$PERSONA_STORE_DIR"`, else `"$XDG_CONFIG_HOME/personas"`
+  (`~/.config/personas` if `$XDG_CONFIG_HOME` unset/empty)
 
 Persona config path (endpoint, harnesses, etc.)
 

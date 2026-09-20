@@ -33,6 +33,7 @@ pytestmark = pytest.mark.skipif(not (ROOT / "pyproject.toml").exists(),
 @pytest.fixture(autouse=True)
 def fixed_store(monkeypatch):
     """Pin the store, so a doc example resolves the same way everywhere."""
+    monkeypatch.delenv("PERSONA_STORE_DIR", raising=False)   # outranks XDG
     monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg")
 
 

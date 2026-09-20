@@ -13,6 +13,7 @@ import persona_grata as pg
 def home(tmp_path, monkeypatch):
     """A throwaway HOME + persona store, with the interactive bits stubbed out."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("PERSONA_STORE_DIR", raising=False)   # outranks XDG; would escape tmp_path
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
     monkeypatch.setenv("SHELL", "/bin/bash")
     monkeypatch.setattr(pg, "_prompt_key", lambda desc: "sk-test-key")

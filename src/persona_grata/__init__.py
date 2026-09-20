@@ -24,10 +24,30 @@ __version__ = "0.0.4.dev0"
 # Default values for selected environment variables (rule 1e is "empty string";
 # these are the caller-supplied defaults the engine falls back to when a var is
 # absent from the real environment).
-ENV_DEFAULTS = {
-    "XDG_CONFIG_HOME": str(Path.home() / ".config"),
-    "HOME": str(Path.home()),
-}
+#
+# Built per call rather than frozen at import, because PERSONA_STORE_DIR's
+# fallback is *derived* from XDG_CONFIG_HOME, and that can change within a
+# process -- the test suites relocate the store by setting it. A value computed
+# once at import would stop tracking it and quietly pin the store.
+def _env_defaults():
+    """Fallbacks for the ``$VAR``s the schema uses, resolved against the environment.
+
+    The store's location is a three-step chain, and this supplies the last two
+    steps -- ``substitute_env`` prefers the real environment, so a set
+    ``$PERSONA_STORE_DIR`` wins before these are consulted at all::
+
+        $PERSONA_STORE_DIR -> $XDG_CONFIG_HOME/personas -> ~/.config/personas
+
+    Substituted text is not re-scanned (rule 1d), so the fallback has to be a
+    resolved path; ``"$XDG_CONFIG_HOME/personas"`` would survive as literal text.
+    """
+    home = Path.home()
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(home / ".config")
+    return {
+        "XDG_CONFIG_HOME": xdg,
+        "HOME": str(home),
+        "PERSONA_STORE_DIR": str(Path(xdg) / "personas"),
+    }
 
 # Shared verification bits live here, NOT in the schema (only per-harness values
 # belong in agents.yaml). content-type is always sent; the ping body is the same
@@ -235,7 +255,7 @@ def declared_personas(path, env_defaults=None):
     """Persona names the user's file asks for, in order (empty when there is none)."""
     if path is None:
         return []
-    user_cfg = load_yaml(path, env_defaults if env_defaults is not None else ENV_DEFAULTS)
+    user_cfg = load_yaml(path, env_defaults if env_defaults is not None else _env_defaults())
     if not isinstance(user_cfg, dict):
         return []
     return list(_normalize_personas(user_cfg)["personas"])
@@ -418,7 +438,7 @@ def harness_names(pid, path=None, env_defaults=None, overrides=None):
     be reported as such rather than blowing up template resolution.
     """
     if env_defaults is None:
-        env_defaults = ENV_DEFAULTS
+        env_defaults = _env_defaults()
     user_cfg = _normalize_personas(load_yaml(path, env_defaults) or {} if path else {})
     if overrides:
         deep_merge(_normalize_personas(copy.deepcopy(overrides)), user_cfg)
@@ -558,7 +578,7 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     asks for it, instead of breaking every other command.
     """
     if env_defaults is None:
-        env_defaults = ENV_DEFAULTS
+        env_defaults = _env_defaults()
 
     # 1. User config -- optional; the shipped presets alone are a usable config.
     user_cfg = {}
@@ -1343,7 +1363,7 @@ def _interview(persona, harnesses, definition, export_path, config_path, known,
         elif not keyed:
             # Switched off and being switched back on. Take the location from
             # the schema rather than keeping a second copy of it here.
-            schema = load_yaml(DATA_DIR / "persona.default.yaml", ENV_DEFAULTS) or {}
+            schema = load_yaml(DATA_DIR / "persona.default.yaml", _env_defaults()) or {}
             definition["token"] = schema.get("token")
 
     # Export sets nothing up, so in that mode there is no harness to choose.
@@ -1504,11 +1524,11 @@ def _authored_definition(persona_id, config_path, definition):
     template is the handful of settings someone would have written by hand, so
     an existing agent exports as something recognisably like its own preset.
     """
-    schema = load_yaml(DATA_DIR / "persona.default.yaml", ENV_DEFAULTS) or {}
+    schema = load_yaml(DATA_DIR / "persona.default.yaml", _env_defaults()) or {}
     authored = {}
-    deep_merge(_load_preset("persona", persona_id, ENV_DEFAULTS, schema), authored)
+    deep_merge(_load_preset("persona", persona_id, _env_defaults(), schema), authored)
     if config_path:
-        declared = _normalize_personas(load_yaml(config_path, ENV_DEFAULTS) or {})["personas"]
+        declared = _normalize_personas(load_yaml(config_path, _env_defaults()) or {})["personas"]
         if isinstance(declared.get(persona_id), dict):
             deep_merge(declared[persona_id], authored)
     deep_merge(definition, authored)          # the flags are the last word

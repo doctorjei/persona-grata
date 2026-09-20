@@ -1,6 +1,7 @@
 """Layered-configuration assembly: defaults -> presets -> user overrides."""
 
 import json
+import pathlib
 import shutil
 
 import pytest
@@ -11,7 +12,13 @@ import persona_grata as pg
 
 @pytest.fixture(autouse=True)
 def fixed_store(monkeypatch):
-    """Pin the store so resolved paths are predictable."""
+    """Pin the store so resolved paths are predictable.
+
+    PERSONA_STORE_DIR is cleared as well as XDG_CONFIG_HOME being set: it
+    outranks XDG in the lookup chain, so a developer who has it exported would
+    otherwise see every `/xdg/personas` expectation in this file fail.
+    """
+    monkeypatch.delenv("PERSONA_STORE_DIR", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg")
 
 
@@ -19,6 +26,51 @@ def write(tmp_path, text):
     path = tmp_path / "agents.yaml"
     path.write_text(text)
     return str(path)
+
+
+# --------------------------------------------------------------------------- #
+# Where the store lives
+# --------------------------------------------------------------------------- #
+#: The store's location is a three-step chain, and each step has to be checked
+#: on its own: a passing suite proves only that whichever step the environment
+#: happens to take still works.
+_MINIMAL = """
+    personas:
+      test_user:
+        mind:
+          endpoint: "https://api.test.com"
+"""
+
+
+def test_store_location_prefers_the_environment_variable(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERSONA_STORE_DIR", "/elsewhere/personas")
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["persona_store"] == "/elsewhere/personas"
+    assert cfg["personas"]["test_user"]["path"] == "/elsewhere/personas/test_user"
+
+
+def test_store_location_falls_back_to_xdg(tmp_path):
+    # PERSONA_STORE_DIR is cleared by the autouse fixture; XDG is set to /xdg.
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["persona_store"] == "/xdg/personas"
+
+
+def test_store_location_falls_back_to_home_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["persona_store"] == str(pathlib.Path.home() / ".config" / "personas")
+
+
+def test_a_configured_store_outranks_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERSONA_STORE_DIR", "/elsewhere/personas")
+    cfg = pg.load_config(write(tmp_path, """
+        persona_store: "/tmp/store"
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    assert cfg["persona_store"] == "/tmp/store"
 
 
 # --------------------------------------------------------------------------- #
@@ -821,6 +873,6 @@ def test_shipped_yaml_parses(path):
                          [("harness", n) for n in pg.preset_names("harness")] +
                          [("dialect", n) for n in pg.preset_names("dialect")])
 def test_preset_wrapper_matches_its_filename(kind, name):
-    data = pg.load_yaml(pg.DATA_DIR / f"{kind}.{name}.yaml", pg.ENV_DEFAULTS)
+    data = pg.load_yaml(pg.DATA_DIR / f"{kind}.{name}.yaml", pg._env_defaults())
     if len(data) == 1:
         assert next(iter(data)) == name
