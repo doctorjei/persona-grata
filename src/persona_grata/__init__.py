@@ -602,6 +602,18 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     base_cfg = load_yaml(DATA_DIR / "agents.default.yaml", env_defaults) or {}
     base_personas = _ensure_dict(base_cfg, "personas")
 
+    # 2a. The store's own settings, layered between what we ship and what the
+    # user wrote: more specific than a default, less specific than their file.
+    # Read from wherever the store actually is -- the user's `persona_store` if
+    # they set one, the environment chain otherwise -- so the settings travel
+    # with the store rather than being pinned to the standard path.
+    store_cfg = store_config(user_cfg.get("persona_store") or base_cfg.get("persona_store"),
+                             env_defaults)
+    if store_cfg:
+        store_personas = _ensure_dict(store_cfg, "personas")
+        deep_merge(store_personas, base_personas)
+        deep_merge({k: v for k, v in store_cfg.items() if k != "personas"}, base_cfg)
+
     persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
     harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
     dialect_default = load_yaml(DATA_DIR / "dialect.default.yaml", env_defaults) or {}
@@ -830,9 +842,56 @@ def _write_private(path, text):
 
 
 # --------------------------------------------------------------------------- #
+# The store's own settings
+# --------------------------------------------------------------------------- #
+#: Settings that generalize across every persona in a store, rather than
+#: belonging to any one of them. YAML content with a `.cfg` extension: the
+#: extension is deliberately format-agnostic, so the serialization can change
+#: later without renaming the file or breaking anyone's path.
+_STORE_CFG_FILE = "persona_store.cfg"
+
+
+def store_config_path(store):
+    """Where the store's own settings live: beside the persona directories.
+
+    Same rule as the name registry -- an extension cannot be mistaken for a
+    persona directory, because the id charset forbids ``.``.
+    """
+    return _path(store) / _STORE_CFG_FILE if store else None
+
+
+def store_config(store, env_defaults=None):
+    """Settings held by the store itself, or ``{}`` if it has none.
+
+    Read with :func:`load_yaml` rather than a plain parse, unlike the name
+    registry: this file is *authored*, so a ``$VAR`` in it should expand the way
+    one in an ``agents.yaml`` does. It is also hand-editable and rarely written,
+    which is why it is a separate file from ``agent_names.cfg`` -- that one is
+    a machine registry rewritten wholesale on every rename, and passing a
+    commented settings file through PyYAML on each one would strip it.
+
+    A store that does not exist yet, or has no settings, is not an error: the
+    shipped defaults are a usable configuration on their own.
+    """
+    path = store_config_path(store)
+    if path is None or not path.exists():
+        return {}
+    try:
+        data = load_yaml(path, env_defaults if env_defaults is not None else _env_defaults())
+    except (OSError, yaml.YAMLError):
+        print(f"Warning: cannot read {path}; ignoring the store's settings.", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        print(f"Warning: {path} is not a mapping; ignoring the store's settings.",
+              file=sys.stderr)
+        return {}
+    return data
+
+
+# --------------------------------------------------------------------------- #
 # Agent names
 # --------------------------------------------------------------------------- #
-_NAMES_FILE = "agent_names.yaml"
+_NAMES_FILE = "agent_names.cfg"
 
 _NAMES_HEADER = """\
 # Chosen agent names, written by persona-grata. Each entry maps a name to the

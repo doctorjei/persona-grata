@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Secret backends: a persona's API key is held by the password manager you already use, rather
+  than by a file persona-grata writes. Three ship — `pass`, `gopass`, and `prs` — and each is an
+  ordinary preset (`secret.<name>.yaml`) declaring the commands to fetch and store a key, so a
+  site can add its own. persona-grata never invokes `gpg` itself and has no opinion about the
+  encryption: whatever wrote the store reads it back.
+- `secret_backend` names which manager holds every persona's key. One store uses one manager, so
+  it is set once for the store rather than per persona; a persona supplies only its `entry`.
+- `$PERSONA_STORE_DIR` locates the persona store, falling back to `$XDG_CONFIG_HOME/personas` and
+  then `~/.config/personas`. An explicit `persona_store` setting still outranks all three.
+- `<persona_store>/persona_store.cfg` holds settings that generalise across every persona in a
+  store. It is read from wherever the store is, so its settings travel with a relocated store, and
+  it layers between the shipped defaults and your own agents file.
+
+### Changed
+
+- **Breaking:** the chosen-name registry is now `<persona_store>/agent_names.cfg`, renamed from
+  `agent_names.yaml`. Names recorded by 0.0.3 are not read; re-run `--name` to restore them.
+
 ## [0.0.3] — 2026-09-19
 
 ### Added

@@ -579,7 +579,7 @@ def test_a_malformed_designation_says_which_half_is_wrong(home, token):
 # Chosen agent names
 # --------------------------------------------------------------------------- #
 def names_file(home):
-    return home / ".config" / "personas" / "agent_names.yaml"
+    return home / ".config" / "personas" / "agent_names.cfg"
 
 
 def test_a_name_replaces_the_command_but_not_the_marker(home):

@@ -46,6 +46,14 @@ personas: [kimi, minimax]   # several
 
 Such personas, loaded as presents, resolve from templates (e.g., `{{personas.kimi.mind.model}}`).
 
+### `secret_backend` -> `str`
+- Required: **No**
+- Default: `None`
+
+Which password manager holds every persona's API key — `pass`, `gopass`, or `prs`. One store uses
+one manager, so this is normally set once in `<persona_store>/persona_store.cfg` rather than in an
+agents file. See [Secret Backend Configuration](#secret-backend-configuration-per-persona).
+
 ---
 
 ## Persona Configuration
@@ -316,14 +324,9 @@ encrypt anything and never invokes `gpg` directly: it runs the manager you alrea
 the key from that command's output.
 
 Three backends ship — `pass`, `gopass`, and `prs` — and each supplies the command keys below, so a
-persona normally sets only `backend` and `entry`. A site can add its own backend by declaring the
-same keys, since a backend is a pair of commands.
-
-### `backend` -> `str`
-- Required: **No**
-- Default: `None`
-
-Which manager holds the key. `None` means this persona has no key.
+persona normally sets only `entry`; which manager is used is `secret_backend`, set once for the
+store. A site can add its own backend by declaring the same keys, since a backend is a pair of
+commands.
 
 ### `entry` -> `str`
 - Required: **No**

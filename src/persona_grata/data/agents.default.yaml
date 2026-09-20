@@ -6,3 +6,6 @@ persona_store: "$PERSONA_STORE_DIR"        # Persona config path (endpoint, harn
                                            # $PERSONA_STORE_DIR -> $XDG_CONFIG_HOME/personas
                                            # -> ~/.config/personas
 personas: None                             # Map/Dict: {(<persona>: <settings>)*} <REQUIRED>
+secret_backend: None                       # Password manager holding every persona's key
+                                           # (secret.*.yaml). One store, one manager -- normally
+                                           # set once in <persona_store>/persona_store.cfg

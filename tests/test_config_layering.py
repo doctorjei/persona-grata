@@ -74,6 +74,62 @@ def test_a_configured_store_outranks_the_environment(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# The store's own settings
+# --------------------------------------------------------------------------- #
+def store_cfg(tmp_path, monkeypatch, text):
+    """Point the store at tmp_path and give it a persona_store.cfg."""
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "persona_store.cfg").write_text(text)
+    monkeypatch.setenv("PERSONA_STORE_DIR", str(store))
+    return store
+
+
+def test_a_store_with_no_settings_file_is_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("PERSONA_STORE_DIR", str(tmp_path / "nothing-here"))
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["secret_backend"] is None
+
+
+def test_store_settings_are_read(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["secret_backend"] == "pass"
+
+
+def test_the_users_file_outranks_the_store(tmp_path, monkeypatch):
+    # Most specific wins: what they wrote beats what the store carries.
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    cfg = pg.load_config(write(tmp_path, """
+        secret_backend: gopass
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+    """))
+    assert cfg["secret_backend"] == "gopass"
+
+
+def test_store_settings_travel_with_a_relocated_store(tmp_path, monkeypatch):
+    # The settings live IN the store, so pointing elsewhere must not keep
+    # reading the old one -- that is the whole reason the file is in there.
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "persona_store.cfg").write_text("secret_backend: prs\n")
+    monkeypatch.setenv("PERSONA_STORE_DIR", str(other))
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["secret_backend"] == "prs"
+
+
+def test_an_unreadable_store_settings_file_warns_and_carries_on(tmp_path, monkeypatch, capsys):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: [unclosed\n")
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["secret_backend"] is None
+    assert "persona_store.cfg" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
 # Layering
 # --------------------------------------------------------------------------- #
 def test_minimal_user_config_gets_every_default(tmp_path):
