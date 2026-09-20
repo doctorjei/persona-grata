@@ -142,7 +142,8 @@ def schema_keys():
     """Every key the `.default.yaml` files define -- those files *are* the schema."""
     keys = set()
     for name in ("agents.default.yaml", "persona.default.yaml",
-                 "harness.default.yaml", "dialect.default.yaml"):
+                 "harness.default.yaml", "dialect.default.yaml",
+                 "secret.default.yaml"):
         data = yaml.safe_load((pg.DATA_DIR / name).read_text()) or {}
         for key, value in data.items():
             keys.add(key)

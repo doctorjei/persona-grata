@@ -131,6 +131,19 @@ harnesses:
   codex: None
 ```
 
+### `secret` -> `NestedDict`
+- Required: **No**
+- Default: `None` (this persona has no key)
+
+The password manager holding this persona's API key, and the entry within it. See
+[Secret Backend Configuration](#secret-backend-configuration-per-persona) below:
+
+```yaml
+secret:
+  backend: pass
+  entry: "work/kimi"
+```
+
 ---
 
 ## Harness Configuration (Per Persona)
@@ -292,3 +305,47 @@ List of header lines; may be omitted. `content-type: application/json` is always
 - Default: `""` (minimal `"ping"` completion request using `mind.model`)
 
 Body for verification call; only used if endpoint rejects standard single-message probe.
+
+---
+
+## Secret Backend Configuration (Per Persona)
+
+A secret backend is the password manager holding a persona's API key. Persona-Grata does not
+encrypt anything and never invokes `gpg` directly: it runs the manager you already use and reads
+the key from that command's output.
+
+Three backends ship — `pass`, `gopass`, and `prs` — and each supplies the command keys below, so a
+persona normally sets only `backend` and `entry`. A site can add its own backend by declaring the
+same keys, since a backend is a pair of commands.
+
+### `backend` -> `str`
+- Required: **No**
+- Default: `None`
+
+Which manager holds the key. `None` means this persona has no key.
+
+### `entry` -> `str`
+- Required: **No**
+- Default: `""`
+
+Entry name within the manager's store, relative to its root (e.g. `work/kimi`).
+
+### `fetch` -> `str`
+- Required: **No**
+- Default: (supplied by the backend)
+
+Command printing the key on standard output. Run at setup, and again by the shell wrapper at every
+agent launch — so it must not block on a prompt.
+
+### `store` -> `str`
+- Required: **No**
+- Default: (supplied by the backend)
+
+Command reading the key from standard input. Run at setup only. A backend that can only be written
+interactively leaves this unset.
+
+### `probe` -> `str`
+- Required: **No**
+- Default: (supplied by the backend)
+
+Executable that must be present; named in the error when it is missing.

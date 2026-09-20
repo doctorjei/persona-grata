@@ -10,6 +10,7 @@ mind:                                            # Cognitive elements (endpoint,
   model_3: ""                                    # Alt. model #3 (not sent if empty/unset)
   model_4: ""                                    # Alt. model #4 (not sent if empty/unset)
 harnesses: None                                  # Map/Dict: {(<harness>: <harness settings>)*}
+secret: None                                     # Password manager holding the key (secret.*.yaml)
 
 # All supported harnesses are added in addition to those listed. Set to "None" to disable:
 #    harnesses:
