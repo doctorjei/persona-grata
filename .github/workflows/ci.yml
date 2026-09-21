@@ -56,8 +56,9 @@ jobs:
         with:
           python-version: "3.13"
       # Exact pin: 0.x API is unsettled per its README, so no >=, no git ref.
-      - run: pip install "kinemata==0.1.1"
+      - run: pip install "kinemata==0.3.0"
       # Advisory first, so the log shows the full picture even when green.
       - run: kinemata review --verbose
       - run: kinemata check
       - run: kinemata claims
+      - run: kinemata parity

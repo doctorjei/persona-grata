@@ -50,3 +50,25 @@ note = "registries against this tree"
 [[gate]]
 command = "kinemata claims"
 note = "documentation, and this inventory"
+
+# The post-release bump, enforced rather than remembered: the tree's version
+# must not be one the index already carries. Between an upload and the .dev
+# bump this goes red, and that is correct -- the window is exactly when a
+# git+https install silently does nothing. Cache-bust at BOTH layers
+# (header + changing query parameter); the header alone does not reach a CDN,
+# and a cached read passes wrongly, which is worse than no gate.
+[[registry]]
+name = "tree-version"
+kind = "toml-value"
+source = "pyproject.toml"
+path = ["project", "version"]
+
+[[parity]]
+registry = "tree-version"
+relation = "disjoint"
+command = ["python", "-c", 'import json,time,urllib.request; u=f"https://pypi.org/pypi/persona-grata/json?{int(time.time())}"; q=urllib.request.Request(u,headers={"Cache-Control":"no-cache"}); d=json.load(urllib.request.urlopen(q,timeout=30)); print("\n".join(sorted(d["releases"])))']
+extract = '(?m)^(\S+)$'
+
+[[gate]]
+command = "kinemata parity"
+note = "tree version is not on the index (post-release bump enforcement)"
