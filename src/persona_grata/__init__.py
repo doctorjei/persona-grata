@@ -919,6 +919,183 @@ def _secret_fetch(backend, entry, argv):
     return key
 
 
+def _is_interactive():
+    """Whether anyone is there to answer a wizard question."""
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def _run_manager(argv, what):
+    """Run a manager command during setup; exit with its diagnostics on failure.
+
+    Unlike :func:`_secret_fetch`, stderr is shown: no key is in flight during
+    store creation, so the tool's own error is the useful one.
+    """
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=_SECRET_TIMEOUT)
+    except OSError as e:
+        sys.exit(f"Error: could not run {' '.join(argv)} ({e}).")
+    if proc.returncode != 0:
+        sys.exit(f"Error: {what} failed (exit {proc.returncode}): {proc.stderr.strip()}")
+    return proc
+
+
+def _wizard_key_source(prog):
+    """Where the manager's encryption key comes from: file, typed, or created."""
+    print(f"The '{prog}' utility requires a GPG key.\n")
+    print("[f]ile Path\n[i]nput stream (type it in)\n[C]reate a new key")
+    choice = _ask("Where should the GPG key come from [f/i/C]? ").lower()
+    if choice == "f":
+        path = _ask("Path to the file holding the key id? ")
+        try:
+            key_id = Path(path).read_text().strip()
+        except OSError as e:
+            sys.exit(f"Error: cannot read a key id from {path} ({e}).")
+        if not key_id:
+            sys.exit(f"Error: {path} holds no key id.")
+        return key_id
+    if choice == "i":
+        return _ask("GPG key id? ")
+    if choice == "c":
+        return _wizard_create_key()
+    sys.exit(f"Error: answer 'f', 'i' or 'C' (got '{choice}').")
+
+
+def _wizard_create_key():
+    """Generate a key for the manager to init with, and return its fingerprint."""
+    identity = _ask("Name and email for the new key (e.g. Agent <agent@example.com>)? ")
+    print(" - Generating a key with no passphrase, so unattended fetch works.")
+    _run_manager(["gpg", "--batch", "--passphrase", "", "--quick-generate-key",
+                  identity, "default", "default", "never"], "key generation")
+    # Keygen appends, so the newest match is the one just made.
+    proc = _run_manager(["gpg", "--list-keys", "--with-colons", identity], "key listing")
+    fingerprints = [line.split(":")[9] for line in proc.stdout.splitlines()
+                    if line.startswith("fpr:")]
+    if not fingerprints:
+        sys.exit(f"Error: generated a key for '{identity}' but cannot list it.")
+    return fingerprints[-1]
+
+
+def _wizard_choose(question, options, default):
+    """One backend question from the wizard's menus. ``options`` maps letters
+    to ``(name, value)``; matching is case-insensitive and anything else exits
+    naming what was offered."""
+    answer = _ask(question, default).lower()
+    for letter, (name, value) in options.items():
+        if answer == letter.lower():
+            return value
+    sys.exit(f"Error: answer one of {', '.join(options)} (got '{answer}').")
+
+
+def _wizard_pass():
+    """Create a `pass` store: one key decision, then `pass init`."""
+    key_id = _wizard_key_source("pass")
+    _run_manager(["pass", "init", key_id], "pass init")
+    print(f" - Password store initialized for {key_id}.")
+
+
+def _wizard_gopass():
+    """Create a `gopass` store: crypto menu, storage menu, key, init.
+
+    Menus list only what is installed; a question with a single option is
+    skipped rather than asked. `plain` is plaintext and needs nothing, so it
+    is always listed last -- and choosing it skips the key as well as the
+    warning applying.
+    """
+    crypto = {}
+    if shutil.which("gpg"):
+        crypto["G"] = ("GPG-CLI", "gpgcli")
+    if shutil.which("age"):
+        crypto["a"] = ("age", "age")
+    crypto["p"] = ("plaintext", "plain")
+    if list(crypto) == ["p"]:
+        print("WARNING: only plaintext is available for storage, but this is INSECURE; "
+              "consider aborting and installing 'gpg' or 'age'.")
+    if len(crypto) == 1:
+        chosen_crypto = next(iter(crypto.values()))[1]
+    else:
+        print("You have these cryptographic backend options:\n")
+        print("\n".join(f"[{letter}]{name}" if letter.isupper() else f"[{letter}]{name}"
+                        for letter, (name, _) in crypto.items()))
+        print("\nWARNING: storing passwords / keys / tokens in plaintext is considered "
+              "INSECURE.\n")
+        chosen_crypto = _wizard_choose("Which backend should be used to encrypt the store",
+                                       crypto, next(iter(crypto)))
+    storage = {"F": ("Filesystem", "fs")}
+    if shutil.which("git"):
+        storage["g"] = ("git", "gitfs")
+    if len(storage) == 1:
+        chosen_storage = "fs"
+    else:
+        print("You have these storage backend options available:\n")
+        print("[F]ilesystem\n[g]it\n")
+        chosen_storage = _wizard_choose("Which backend should be used to store the data",
+                                        storage, "F")
+    argv = ["gopass", "init", "--crypto", chosen_crypto, "--storage", chosen_storage]
+    if chosen_crypto != "plain":
+        argv.append(_wizard_key_source("gopass"))
+    _run_manager(argv, "gopass init")
+    print(f" - Password store initialized ({chosen_crypto}/{chosen_storage}).")
+
+
+def _wizard_prs():
+    """Create a `prs` store: init takes no decisions, then the key prompt is
+    redirected -- an existing key is added, a new one generated."""
+    _run_manager(["prs", "init"], "prs init")
+    print("The 'prs' utility requires a key.\n")
+    print("[f]ile Path\n[i]nput stream (type it in)\n[C]reate a new key")
+    choice = _ask("Where should the key come from [f/i/C]? ").lower()
+    if choice in ("f", "i"):
+        _run_manager(["prs", "recipients", "add", "--secret"], "adding the key")
+    elif choice == "c":
+        _run_manager(["prs", "recipients", "generate"], "generating a key")
+    else:
+        sys.exit(f"Error: answer 'f', 'i' or 'C' (got '{choice}').")
+    print(" - Password store initialized.")
+
+
+def _store_missing(backend):
+    """Whether the backend's store is absent (a broken one reads as missing,
+    and the tool's own error then says so -- except `pass`, where init would
+    silently rewrite `.gpg-id`, so an existing store dir refuses the wizard)."""
+    if backend == "pass":
+        store = Path(os.environ.get("PASSWORD_STORE_DIR") or Path.home() / ".password-store")
+        if store.is_dir():
+            return False
+    proc = subprocess.run([backend, "ls"] if backend != "prs" else ["prs", "list"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          timeout=_SECRET_TIMEOUT)
+    return proc.returncode != 0
+
+
+def _ensure_secret_store(backend):
+    """Step 0 plus the wizard: return once a store exists, exit otherwise.
+
+    Custom backends have no wizard -- pg cannot know their init -- so they get
+    instructions, not questions. Unattended runs get instructions too: prompting
+    into the void is the hang the timeout exists to prevent.
+    """
+    if backend not in ("pass", "gopass", "prs"):
+        sys.exit(f"Error: secret backend '{backend}' has no guided setup -- "
+                 "initialize its store by hand, then re-run.")
+    for prog in ("pass", "gopass", "prs"):
+        if backend == prog and shutil.which(prog) is None:
+            sys.exit(f"Error: secret backend '{backend}' is not installed "
+                     f"(no '{prog}' on PATH).")
+    need = {"pass": "gpg", "gopass": None, "prs": "gpg"}[backend]
+    if need is not None and shutil.which(need) is None:
+        sys.exit(f"Error: secret backend '{backend}' needs '{need}' on PATH "
+                 f"(install it, then re-run).")
+    if not _store_missing(backend):
+        return
+    if not _is_interactive():
+        sys.exit(f"Error: secret backend '{backend}' has no store yet -- run setup "
+                 "at a terminal to create one, or initialize it by hand.")
+    {"pass": _wizard_pass, "gopass": _wizard_gopass, "prs": _wizard_prs}[backend]()
+
+
 # --------------------------------------------------------------------------- #
 # The store's own settings
 # --------------------------------------------------------------------------- #

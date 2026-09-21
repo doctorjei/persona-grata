@@ -1413,3 +1413,163 @@ def test_secret_probe_refuses_a_missing_executable():
         pg._secret_probe("prs", {"probe": "definitely-not-installed"})
     message = str(exit_info.value)
     assert "prs" in message and "definitely-not-installed" in message
+
+
+# --------------------------------------------------------------------------- #
+# Store-creation wizard (fake managers on PATH; stdin scripted, never real)
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def fakebin(tmp_path, monkeypatch):
+    """A bin dir that IS the PATH, so `which` sees only what the test puts there."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    monkeypatch.setenv("PATH", str(bindir))
+    log = tmp_path / "calls.log"
+    monkeypatch.setenv("PG_FAKE_LOG", str(log))
+    return bindir
+
+
+def _fake(bindir, name, body):
+    path = bindir / name
+    path.write_text("#!/bin/sh\necho \"$@\" >> \"$PG_FAKE_LOG\"\n" + body)
+    path.chmod(0o755)
+
+
+def _scripted(monkeypatch, *answers):
+    """Feed the wizard its keystrokes; fail loudly if it asks for more."""
+    pending = list(answers)
+    monkeypatch.setattr("builtins.input", lambda prompt: pending.pop(0))
+
+
+_FAKE_PASS = """\
+case "$1" in
+  ls) exit ${PG_FAKE_LS_RC:-0};;
+esac
+exit 0
+"""
+
+_FAKE_GPG = """\
+case "$*" in
+  *quick-generate-key*) exit 0;;
+  *list-keys*) printf 'fpr:::::::::FEEDFACE1234:\\n';;
+esac
+exit 0
+"""
+
+
+def test_wizard_refuses_a_backend_with_no_guided_setup(fakebin):
+    with pytest.raises(SystemExit) as exit_info:
+        pg._ensure_secret_store("vault")
+    assert "no guided setup" in str(exit_info.value)
+
+
+def test_wizard_names_a_missing_manager(fakebin):
+    with pytest.raises(SystemExit) as exit_info:
+        pg._ensure_secret_store("pass")
+    message = str(exit_info.value)
+    assert "pass" in message and "not installed" in message
+
+
+def test_wizard_names_a_missing_dependency(fakebin):
+    _fake(fakebin, "pass", _FAKE_PASS)
+    with pytest.raises(SystemExit) as exit_info:
+        pg._ensure_secret_store("pass")
+    assert "'gpg'" in str(exit_info.value)
+
+
+def test_wizard_existing_store_returns_quietly(fakebin, monkeypatch):
+    _fake(fakebin, "pass", _FAKE_PASS)
+    _fake(fakebin, "gpg", "exit 0\n")
+    monkeypatch.setenv("PASSWORD_STORE_DIR", str(fakebin / "store"))
+    (fakebin / "store").mkdir()
+    assert pg._ensure_secret_store("pass") is None
+
+
+def test_wizard_unattended_prints_instructions(fakebin, monkeypatch):
+    _fake(fakebin, "pass", _FAKE_PASS)
+    _fake(fakebin, "gpg", "exit 0\n")
+    monkeypatch.setenv("PASSWORD_STORE_DIR", str(fakebin / "no-store"))
+    monkeypatch.setenv("PG_FAKE_LS_RC", "1")
+    monkeypatch.setattr(pg, "_is_interactive", lambda: False)
+    with pytest.raises(SystemExit) as exit_info:
+        pg._ensure_secret_store("pass")
+    assert "at a terminal" in str(exit_info.value)
+
+
+def _run_pass_wizard(fakebin, monkeypatch, tmp_path, *answers):
+    _fake(fakebin, "pass", _FAKE_PASS)
+    _fake(fakebin, "gpg", _FAKE_GPG)
+    monkeypatch.setenv("PASSWORD_STORE_DIR", str(tmp_path / "store"))
+    monkeypatch.setenv("PG_FAKE_LS_RC", "1")
+    monkeypatch.setattr(pg, "_is_interactive", lambda: True)
+    _scripted(monkeypatch, *answers)
+    pg._ensure_secret_store("pass")
+    return (tmp_path / "calls.log").read_text()
+
+
+def test_pass_wizard_reads_the_key_id_from_a_file(fakebin, monkeypatch, tmp_path):
+    keyfile = tmp_path / "key.id"
+    keyfile.write_text("  KEYFROMFILE  \n")
+    log = _run_pass_wizard(fakebin, monkeypatch, tmp_path, "f", str(keyfile))
+    assert "init KEYFROMFILE" in log
+
+
+def test_pass_wizard_takes_a_typed_key_id(fakebin, monkeypatch, tmp_path):
+    log = _run_pass_wizard(fakebin, monkeypatch, tmp_path, "i", "TYPEDKEYID")
+    assert "init TYPEDKEYID" in log
+
+
+def test_pass_wizard_creates_a_key_on_request(fakebin, monkeypatch, tmp_path):
+    log = _run_pass_wizard(fakebin, monkeypatch, tmp_path, "C", "Wizard <wiz@test>")
+    assert "quick-generate-key Wizard <wiz@test>" in log
+    assert "init FEEDFACE1234" in log
+
+
+def test_pass_wizard_refuses_a_bad_choice(fakebin, monkeypatch, tmp_path):
+    with pytest.raises(SystemExit) as exit_info:
+        _run_pass_wizard(fakebin, monkeypatch, tmp_path, "x")
+    assert "'f', 'i' or 'C'" in str(exit_info.value)
+
+
+def test_gopass_wizard_asks_crypto_storage_and_key(fakebin, monkeypatch, tmp_path, capsys):
+    _fake(fakebin, "gopass", 'case "$1" in ls) exit 1;; esac\nexit 0\n')
+    _fake(fakebin, "gpg", "exit 0\n")
+    _fake(fakebin, "git", "exit 0\n")
+    monkeypatch.setattr(pg, "_is_interactive", lambda: True)
+    _scripted(monkeypatch, "G", "F", "i", "GOPASSKEY")
+    pg._ensure_secret_store("gopass")
+    log = (tmp_path / "calls.log").read_text()
+    assert "init --crypto gpgcli --storage fs GOPASSKEY" in log
+    assert "INSECURE" in capsys.readouterr().out
+
+
+def test_gopass_wizard_with_only_plaintext_asks_nothing(fakebin, monkeypatch, tmp_path,
+                                                         capsys):
+    _fake(fakebin, "gopass", 'case "$1" in ls) exit 1;; esac\nexit 0\n')
+    monkeypatch.setattr(pg, "_is_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: (_ for _ in ()).throw(
+        AssertionError(f"asked: {prompt}")))
+    pg._ensure_secret_store("gopass")
+    log = (tmp_path / "calls.log").read_text()
+    assert "init --crypto plain --storage fs" in log
+    assert "only plaintext" in capsys.readouterr().out
+
+
+def test_prs_wizard_adds_an_existing_key(fakebin, monkeypatch, tmp_path):
+    _fake(fakebin, "prs", 'case "$1" in list) exit 1;; esac\nexit 0\n')
+    _fake(fakebin, "gpg", "exit 0\n")
+    monkeypatch.setattr(pg, "_is_interactive", lambda: True)
+    _scripted(monkeypatch, "i")
+    pg._ensure_secret_store("prs")
+    log = (tmp_path / "calls.log").read_text()
+    assert "init" in log.splitlines()
+    assert "recipients add --secret" in log
+
+
+def test_prs_wizard_generates_a_new_key_on_request(fakebin, monkeypatch, tmp_path):
+    _fake(fakebin, "prs", 'case "$1" in list) exit 1;; esac\nexit 0\n')
+    _fake(fakebin, "gpg", "exit 0\n")
+    monkeypatch.setattr(pg, "_is_interactive", lambda: True)
+    _scripted(monkeypatch, "C")
+    pg._ensure_secret_store("prs")
+    assert "recipients generate" in (tmp_path / "calls.log").read_text()
