@@ -1386,3 +1386,30 @@ personas:
     with pytest.raises(SystemExit) as exit_info:
         pg.main([str(path), "orion"])
     assert "no harnesses configured" in str(exit_info.value)
+
+
+# --------------------------------------------------------------------------- #
+# Secret-manager helpers (Phase 2 spine: fetch and probe, no setup flow yet)
+# --------------------------------------------------------------------------- #
+def test_secret_fetch_returns_the_key_stripped():
+    assert pg._secret_fetch("pass", "work/x", ["printf", "sk-test\n\n"]) == "sk-test"
+
+
+def test_secret_fetch_failure_names_entry_and_backend():
+    with pytest.raises(SystemExit) as exit_info:
+        pg._secret_fetch("pass", "work/missing", ["false"])
+    message = str(exit_info.value)
+    assert "work/missing" in message and "pass" in message
+
+
+def test_secret_fetch_of_an_empty_entry_fails():
+    with pytest.raises(SystemExit) as exit_info:
+        pg._secret_fetch("pass", "work/empty", ["printf", ""])
+    assert "work/empty" in str(exit_info.value)
+
+
+def test_secret_probe_refuses_a_missing_executable():
+    with pytest.raises(SystemExit) as exit_info:
+        pg._secret_probe("prs", {"probe": "definitely-not-installed"})
+    message = str(exit_info.value)
+    assert "prs" in message and "definitely-not-installed" in message

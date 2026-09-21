@@ -10,8 +10,10 @@ import os
 import re
 import sys
 import copy
+import shlex
 import shutil
 import getpass
+import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -261,7 +263,8 @@ def declared_personas(path, env_defaults=None):
     return list(_normalize_personas(user_cfg)["personas"])
 
 
-def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dialect_schema):
+def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dialect_schema,
+                     secret_schema):
     """Warn about settings keys the schema does not define.
 
     A misspelled key is otherwise silent: it merges into the tree, nothing reads
@@ -285,6 +288,8 @@ def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dia
         mind = persona.get("mind") if isinstance(persona.get("mind"), dict) else {}
         check(persona, persona_schema, f"personas.{pid}.")
         check(mind, persona_schema.get("mind") or {}, f"personas.{pid}.mind.")
+        if isinstance(persona.get("secret"), dict):
+            check(persona["secret"], secret_schema, f"personas.{pid}.secret.")
         for did, dialect in (mind.get("dialects") or {}).items():
             if not isinstance(dialect, dict):
                 continue
@@ -617,8 +622,10 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
     harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
     dialect_default = load_yaml(DATA_DIR / "dialect.default.yaml", env_defaults) or {}
+    secret_default = load_yaml(DATA_DIR / "secret.default.yaml", env_defaults) or {}
     known_harnesses = preset_names("harness")
     known_dialects = preset_names("dialect")
+    known_backends = preset_names("secret")
 
     # The .default.yaml files *are* the schema; anything else the user wrote is
     # a typo that would otherwise fail silently. pid/hid are injected, not
@@ -629,7 +636,8 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
                        {**persona_default, "pid": None,
                         "mind": {**(persona_default.get("mind") or {}), "dialects": None}},
                        {**harness_default, "hid": None},
-                       dialect_default)
+                       dialect_default,
+                       secret_default)
 
     # 3. Layer every persona: shipped presets plus whatever the user declared.
     for pid in dict.fromkeys(preset_names("persona") + list(users_personas)):
@@ -683,6 +691,39 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
                 deep_merge(preset_harnesses[hid], harness_layer)
             harness_layer["hid"] = hid
             deep_merge(harness_layer, _ensure_dict(harness_map, hid))
+
+        # Secret expansion: the backend's commands under the persona's entry.
+        # Layered like the dialects -- registry default, chosen backend preset,
+        # persona block -- with the user's own file winning last through the
+        # step-4 merge (an explicit `secret:` null there opts back out, since a
+        # null overwrites the layered mapping). The backend is universal, so it
+        # is read off the top level, not the persona; the user's file outranks
+        # the store even when it says nothing (absence falls back, it does not
+        # opt out -- opting out is spelling `secret_backend:` null).
+        backend = (user_cfg.get("secret_backend")
+                   if "secret_backend" in user_cfg
+                   else base_cfg.get("secret_backend"))
+        if backend is not None and backend not in known_backends:
+            sys.exit(f"Error: secret_backend '{backend}' is unknown "
+                     f"(known: {', '.join(known_backends)}).")
+        # The persona tier is the preset's block plus the base store's; the
+        # user's own block joins here too rather than only in the step-4 merge,
+        # so the materialized mapping always carries the full key set and the
+        # step-4 pass merely re-applies the same values.
+        blocks = [persona.get("secret")]
+        if isinstance(declared, dict):
+            blocks.append(declared.get("secret"))
+        if backend is not None or any(isinstance(block, dict) for block in blocks):
+            secret_layer = copy.deepcopy(secret_default)
+            if backend is not None:
+                deep_merge(_load_preset("secret", backend, env_defaults, secret_default),
+                           secret_layer)
+            for block in blocks:
+                if isinstance(block, dict):
+                    deep_merge(block, secret_layer)
+            if backend is not None:
+                secret_layer["backend"] = backend
+            persona["secret"] = secret_layer
 
     # 4. User overrides go on last, so they beat every default and preset.
     deep_merge(user_cfg, base_cfg)
@@ -839,6 +880,43 @@ def _write_private(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
         f.write(text)
+
+
+#: How long a manager fetch may take before setup stops waiting. A passphrase
+#: prompt with nobody to answer it hangs rather than fails, so waiting forever
+#: is a stuck run, not patience; priming gpg-agent is the documented path.
+_SECRET_TIMEOUT = 120
+
+
+def _secret_probe(backend, secret):
+    """Fail fast when the backend's executable is not installed."""
+    probe = (secret or {}).get("probe") or backend
+    if shutil.which(probe) is None:
+        sys.exit(f"Error: secret backend '{backend}' is not installed "
+                 f"(no '{probe}' on PATH).")
+
+
+def _secret_fetch(backend, entry, argv):
+    """Read one key out of the manager. The key is returned, never printed.
+
+    Failures name the entry and the backend, not the store -- and never the
+    key. The manager's own stderr is swallowed for the same reason: its
+    diagnostics may repeat the entry's surroundings, so the way to see why is
+    to run the fetch by hand.
+    """
+    try:
+        proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              timeout=_SECRET_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"Error: secret backend '{backend}' timed out reading entry '{entry}' — "
+                 "it may be waiting for a passphrase (prime gpg-agent).")
+    except OSError as e:
+        sys.exit(f"Error: secret backend '{backend}' could not run ({e}).")
+    key = proc.stdout.decode().strip()
+    if proc.returncode != 0 or not key:
+        sys.exit(f"Error: secret backend '{backend}' could not read entry '{entry}' "
+                 f"(exit {proc.returncode}).")
+    return key
 
 
 # --------------------------------------------------------------------------- #

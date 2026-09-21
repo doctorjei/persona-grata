@@ -927,8 +927,96 @@ def test_shipped_yaml_parses(path):
 @pytest.mark.parametrize("kind,name",
                          [("persona", n) for n in pg.preset_names("persona")] +
                          [("harness", n) for n in pg.preset_names("harness")] +
-                         [("dialect", n) for n in pg.preset_names("dialect")])
+                         [("dialect", n) for n in pg.preset_names("dialect")] +
+                         [("secret", n) for n in pg.preset_names("secret")])
 def test_preset_wrapper_matches_its_filename(kind, name):
     data = pg.load_yaml(pg.DATA_DIR / f"{kind}.{name}.yaml", pg._env_defaults())
     if len(data) == 1:
         assert next(iter(data)) == name
+
+
+# --------------------------------------------------------------------------- #
+# Secret-backend layering (Phase 2 spine: no behaviour yet, only assembly)
+# --------------------------------------------------------------------------- #
+def test_no_backend_leaves_secret_unset(tmp_path):
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    assert cfg["personas"]["test_user"]["secret"] is None
+
+
+def test_backend_preset_layers_under_the_entry(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+            secret:
+              entry: "work/test"
+    """))
+    secret = cfg["personas"]["test_user"]["secret"]
+    assert secret["backend"] == "pass"
+    assert secret["entry"] == "work/test"
+    # The fetch template resolves against its sibling entry (engine rule 3c).
+    assert secret["fetch"] == "pass show work/test"
+    assert secret["store"] == "pass insert -m -f work/test"
+    assert secret["probe"] == "pass"
+
+
+def test_backend_without_entry_still_layers(tmp_path, monkeypatch):
+    # Setup names the missing entry; layering does not invent one.
+    store_cfg(tmp_path, monkeypatch, "secret_backend: gopass\n")
+    cfg = pg.load_config(write(tmp_path, _MINIMAL))
+    secret = cfg["personas"]["test_user"]["secret"]
+    assert secret["backend"] == "gopass"
+    assert secret["entry"] == ""
+
+
+def test_entry_without_backend_is_carried_for_setup_to_refuse(tmp_path, monkeypatch):
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+            secret:
+              entry: "work/test"
+    """))
+    secret = cfg["personas"]["test_user"]["secret"]
+    assert secret["entry"] == "work/test"
+    assert "backend" not in secret
+    assert secret["fetch"] == ""
+
+
+def test_unknown_backend_fails_naming_the_known_ones(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: vault\n")
+    with pytest.raises(SystemExit) as exit_info:
+        pg.load_config(write(tmp_path, _MINIMAL))
+    message = str(exit_info.value)
+    assert "vault" in message
+    for known in pg.preset_names("secret"):
+        assert known in message
+
+
+def test_an_explicit_null_secret_opts_out_despite_a_backend(tmp_path, monkeypatch):
+    # Keyless is spelled, not defaulted: a null overwrites the layered mapping.
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+            secret: None
+    """))
+    assert cfg["personas"]["test_user"]["secret"] is None
+
+
+def test_a_misspelled_secret_key_warns(tmp_path, monkeypatch, capsys):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    pg.load_config(write(tmp_path, """
+        personas:
+          test_user:
+            mind:
+              endpoint: "https://api.test.com"
+            secret:
+              entri: "work/test"
+    """))
+    assert "personas.test_user.secret.entri" in capsys.readouterr().err
