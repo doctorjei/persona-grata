@@ -3,15 +3,15 @@
 **Provenance.** This is the specification for `persona_grata/template_engine.py` as it was built
 before the engine's migration to [`yapyon`](https://github.com/doctorjei/yapyon), published here
 so the citations in that module and its tests resolve for anyone reading the repository. It
-records the **pre-migration** implementation; `yapyon`'s `docs/SPEC.md` is the authority on the
+records the **pre-migration** implementation. The yapyon project's own spec is the authority on the
 semantics going forward, and it is organised by section rather than by the `0`–`7` rules below.
 
-⚑ **Two rules here have no counterpart in yapyon**, measured across their `docs/SPEC.md`,
-`docs/GRAMMAR.md` and `src/yapyon/template.py` plus a repo-wide search: **rule 7**
-(`__MATCH_FIRST__` and the non-terminal call form generally) and **rule 1** (environment
-variables as a single pre-parse pass). ⚑ **Rule 7 is load-bearing** — it is the documented
-default for a harness's `protocol` setting, so dialect negotiation depends on it, and there is
-no conditional substitute for "the first of these keys that the other mapping contains". Raised
+⚑ **Two rules here have no counterpart in yapyon**, measured across that project's spec, grammar
+and implementation plus a repo-wide search: **rule 7** (`__MATCH_FIRST__` and the non-terminal
+call form generally) and **rule 1** (environment variables as a single pre-parse pass). ⚑ **Rule 7
+is load-bearing** — it is the documented default for a harness's `protocol` setting, so dialect
+negotiation depends on it, and there is no conditional substitute for "the first of these keys
+that the other mapping contains". Raised
 with the yapyon maintainers on 2026-10-03; open at the time of writing.
 
 **How to cite a rule.** Rules are numbered `0`–`7`, with sub-rules lettered `a`, `b`,
