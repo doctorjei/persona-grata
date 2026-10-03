@@ -22,6 +22,18 @@ All notable changes to this project are documented here. The format follows
 - `<persona_store>/persona_store.cfg` holds settings that generalise across every persona in a
   store. It is read from wherever the store is, so its settings travel with a relocated store, and
   it layers between the shipped defaults and your own agents file.
+- The template-resolution spec is published in the repository at `spec/TEMPLATE_RESOLUTION.md`. It
+  was previously reachable only from the maintainers' canon, so `src/` and `tests/` cited a path
+  no contributor or reviewer could open. The canon copy remains the source of truth; the repository
+  copy is a mirror. Rule references in code cite the spec's rule number and letter rather than a
+  line number, and the worked example is cited by heading, so a citation no longer rots as the
+  document grows.
+
+### Fixed
+
+- Citations that named `TEMPLATE_RESOLUTION.md` without its `spec/` path, and one that pointed the
+  worked example at lines 35-48 when it lives in the document's `Examples` section. Reported by
+  yapyon while reviewing the engine.
 
 ### Changed
 

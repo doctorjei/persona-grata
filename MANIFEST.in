@@ -2,4 +2,5 @@ include CHANGELOG.md
 include AIPOLICY.md
 include CONFIG_REFERENCE.md
 include CUSTOM_AGENTS.md
+include spec/TEMPLATE_RESOLUTION.md
 include agents-example.yaml

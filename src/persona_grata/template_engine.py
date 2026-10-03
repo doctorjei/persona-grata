@@ -1,4 +1,7 @@
-"""Hierarchical template-resolution engine (conforms to TEMPLATE_RESOLUTION.md).
+"""Hierarchical template-resolution engine (conforms to spec/TEMPLATE_RESOLUTION.md).
+
+Rule numbers below ("rule 3b", "rule 0c") are the spec's own numbering, not line
+numbers -- see the spec's "How to cite a rule" for why a line pointer would rot.
 
 Standalone: no persona/harness knowledge. Three stages, in spec order:
 

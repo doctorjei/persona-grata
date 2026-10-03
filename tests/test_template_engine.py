@@ -129,7 +129,8 @@ def test_value_with_literal_braces_is_injectable():
 
 
 # --------------------------------------------------------------------------- #
-# Canonical worked example from TEMPLATE_RESOLUTION.md (lines 35-48)
+# Canonical worked example from the "Examples" section of
+# spec/TEMPLATE_RESOLUTION.md (cited by heading, not by line number)
 # --------------------------------------------------------------------------- #
 def test_spec_worked_example(monkeypatch):
     monkeypatch.setenv("FOO", "$BAR")           # single pass: stays literal "$BAR"
