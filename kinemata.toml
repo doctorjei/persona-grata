@@ -4,7 +4,10 @@
 
 [project]
 root = "."
-exclude = ["build/", "dist/"]
+# Whole path segments, not substrings, and no trailing slash: 0.4.0 made these
+# match a segment named exactly that at any depth. "build/" would have matched
+# part of a name before and nothing at all after.
+exclude = ["build", "dist"]
 
 # Falsify what the documentation says about this tree: paths that do not exist,
 # links that do not resolve, commits that are not in history. Needs no registry.
