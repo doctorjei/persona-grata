@@ -21,7 +21,7 @@ from pathlib import Path
 import yapyon
 from . import yapyon_io as yio
 
-__version__ = "0.0.4.dev0"
+__version__ = "0.0.4"
 
 # Default values for selected environment variables (rule 1e is "empty string";
 # these are the caller-supplied defaults the engine falls back to when a var is

@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.4] — 2026-10-23
+
 ### Added
 
 - Secret backends: a persona's API key is held by the password manager you already use, rather
@@ -242,7 +244,8 @@ First release.
   permissions and referenced by path via a `.secret_path` file.
 - Shell wrapper installation into `.bashrc` / `.zshrc`, launched as `<persona>-<harness>`.
 
-[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/doctorjei/persona-grata/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/doctorjei/persona-grata/compare/v0.0.2...v0.0.3
 [0.0.3.dev1]: https://pypi.org/project/persona-grata/0.0.3.dev1/
 [0.0.2]: https://github.com/doctorjei/persona-grata/commits/main/
