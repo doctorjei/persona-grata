@@ -2,14 +2,15 @@
 # Harness Default Settings
 #
 # A harness declares which wire protocols it can speak, best first; the persona declares where it
-# serves each one (mind.dialects). __MATCH_FIRST__ negotiates between them, yielding the name of
+# serves each one (mind.dialects). match_first() negotiates between them, yielding the name of
 # the winning dialect -- which is both the compatibility answer ("no match" = cannot be built) and
 # the key that locates its URIs.
 
-harness_desc: "{{__PARENT__.__KEY__}}"           # Short Description (defaults to key string)
-agent_desc: "{{pid}}-{{hid}}"                    # Agent (persona + harness) display name; matches
-                                                 #   the installed wrapper's command name
-path: "{{path}}/{{__PARENT__.__KEY__}}"          # Path to custom harness settings files
+agent_desc: y"{__PARENT__.__PARENT__.__PARENT__.__KEY__}_{__PARENT__.__KEY__}" # Agent (match cmd;
+                                                                               # persona + harness)
+
+harness_desc: y"{__PARENT__.__KEY__}"            # Harness Short Desc. (defaults to key string)
+path: y"{path}/{__PARENT__.__KEY__}"             # Path to custom harness settings files
 auth_var: "API_KEY"                              # Env. variable holding key/token
 path_var: ""                                     # Store var., harness config path (default: none)
 wrapper_env: {}                                  # Extra env. vars exported by the shell wrapper,
@@ -19,7 +20,7 @@ config_file: ""                                  # Main harness config file (ski
 config_store: {}                                 # Harness config data (stored in config file)
 content: ""                                      # Content of harness config file (default: empty)
 supported_dialects: None                         # Protocols spoken, best first <REQUIRED>
-protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"   # Negotiated protocol
+protocol: y"{match_first(supported_dialects, mind.dialects)}"   # Negotiated prot.
 
 ### `supported_dialects` is REQUIRED. With the URI and the verification settings both coming from
 ### the negotiated dialect, a harness that declares none has no URI, nothing to verify against and

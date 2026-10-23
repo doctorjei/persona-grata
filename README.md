@@ -24,7 +24,7 @@ To install a persona for the official kimi servers and use it with Claude Code:
 
 If you have custom endpoints or other settings, create and run with an agent file:
 
-`persona-grata custom_agents.yaml`
+`persona-grata custom_agents.yap`
 
 _Read more about configurations in the [Custom Agents Guide](CUSTOM_AGENTS.md)._
 
@@ -54,8 +54,8 @@ By combining a _persona_ with a _harness_, we get the fully embodied _agent_.
 
 ## Usage
 
-The utility reads agent definitions from a provided YAML file (which describes how personas
-connect to harnesses) and configures your local environment. The sample `agents-example.yaml` file
+The utility reads agent definitions from provided Yapyon (.yap) files (which describes how personas
+connect to harnesses) and configures your local environment. The sample `agents-example.yap` file
 can serve as a starting point; the bundled harness profiles are 'ready' to go and do not require
 modification.
 
@@ -64,10 +64,23 @@ modification.
 Persona-Grata comes with "out of the box" support for the following endpoints and harnesses;
 for each endpoint, a default persona is derived:
 
-_Endpoint Personas_: kimi, local_8000, local_8080, local_lemonade, local_llamacpp, local_lmstudio,
-local_ollama, minimax, navigator
+| Endpoint for Service  | Persona    |
+|-----------------------|------------|
+| api.moonshot.ai:443   | kimi       |
+| localhost:13305       | lemonade   |
+| localhost:9931        | llamacpp   |
+| localhost:1234        | lmstudio   |
+| localhost:8000        | local_8000 |
+| localhost:8080        | local_8080 |
+| localhost:11434       | ollama     |
+| api.minimax.io:443    | minimax    |
+| api.ai.it.ufl.edu:443 | navigator  |
 
-_Coding Harnesses_: claude, codex, goose
+| Application/Tool | Harness |
+|------------------|---------|
+| Claude Code      | claude  |
+| OpenAI Codex CLI | codex   |
+| Goose AI Agent   | goose   |
 
 ### Setup an Agent
 
@@ -83,9 +96,9 @@ _Sets up minimax for use with Claude Code and Codex CLI_
 
 If you need a more customized solution, an agent definition file provides additional flexibility:
 
-**agents.yaml**
+**agents.yap**
 
-```yaml
+```yapyon
 personas:
   orion:
     persona_desc: "Orion Toolkit"
@@ -96,13 +109,13 @@ personas:
 
 Then, run:
 
-`persona-grata agents.yaml orion claude`
+`persona-grata agents.yap orion claude`
 
 _Setup the custom persona (Orion Toolkit) with Claude Code._
 
 Or, to install all agents and harnesses, run without persona and/or harness names:
 
-`persona-grata agents.yaml`
+`persona-grata agents.yap`
 
 _Setup every persona in the file with all known harnesses._
 
@@ -121,7 +134,7 @@ A **name** is yours to choose, and is how the agent is invoked. Pass `--name` to
 
 `pg --name scout local_ollama+codex`
 
-_Sets up the agent and installs it as `scout` rather than `local_ollama-codex`._
+_Sets up the agent and installs it as `scout` rather than `local_ollama_codex`._
 
 A name replaces that command rather than adding a second one, so an agent always has exactly one
 way to run it; naming it again renames it. Use the name wherever a designation goes — `pg -r scout`
@@ -143,9 +156,9 @@ _Sets kimi up with Codex CLI, using a different model just this once._
 
 By default, a definition is ephemeral, but the configuration can be exported if desired:
 
-`pg --endpoint http://who.dr:99 --model llama3 --no-token --export "clauma.yaml" ollama claude`
+`pg --endpoint http://who.dr:99 --model llama3 --no-token --export "clauma.yap" ollama claude`
 
-_Exports the configuration to clauma.yaml._
+_Exports the configuration to clauma.yap._
 
 Export, update, and new persona creation are mutually exclusive:
 
@@ -166,7 +179,7 @@ The same settings can also be asked for rather than typed:
 `pg -i`
 
 _Asks for a name, description, endpoint, model, key, and harnesses, then offers to save the result._
-
+_Asks for a name, description, endpoint, model, key, and harnesses, then offers to save the result._
 Interactive mode supplies whatever flags did not, combining one of the actions above; e.g.,
 `pg -i --update kimi` only asks for missing elements. It cannot be paired with `--remove`.
 
@@ -189,11 +202,15 @@ on your shell. After running setup and sourcing your config (`source ~/.bashrc`)
 terminal, you can launch the agent:
 
 ```bash
-<persona>-<harness> [arguments]
+<persona>_<harness> [arguments]
 ```
 
 A `$SHELL` persona-grata doesn't recognise is reported, not assumed; the wrapper is written in
 plain POSIX shell syntax, so any _POSIX_ shell will run it.
+
+Names — of personas, harnesses, dialects, and agents — are 1–64 ASCII letters, digits, and `_`,
+and do not start with a digit: the same rule kanibako uses, so every name is a valid shell
+function name.
 
 ### Parameters Summary
 
@@ -217,29 +234,39 @@ _^`--token` and `--no-token` are mutually exclusive._
 
 ## Agent Configuration & Templates
 
-Definitions are managed in an agent YAML file. It describes one or more personas and/or harnesses.
-Persona-Grata supports a dynamic variable resolution system via `{{variable}}` syntax.
+Definitions are managed in an agents file written in [yapyon](https://pypi.org/project/yapyon/), a
+YAML-like format. It describes one or more personas and/or harnesses. Unlike YAML, yapyon has no
+unquoted strings — write `model: "kimi-k3"`, not `model: kimi-k3` — and keys are bare identifiers.
 
-- **Context Lookup**: Resolves variables defined in current context (e.g., `{{pid}}`, `{{path}}`).
-- **Hierarchical References**: Absolute references to any value in agents.yaml via dot-notation
-  (e.g., `{{personas.orion.mind.model}}`).
-- **Reserved Identifiers**: `{{__PARENT__}}` resolves to the immediate parent node in the
-  configuration tree and `{{__KEY__}}` to a node's own key, so `{{__PARENT__.__KEY__}}` in a
+Values can be computed from other values with **y-strings**: `y"{<reference>}"` is replaced by the
+value the reference names, and text around it is kept (`y"{path}/token"`).
+
+- **Context Lookup**: A reference is looked up from where it is written outward, so a value nearby
+  wins (e.g., `{api_uri}`, `{path}`).
+- **Hierarchical References**: Absolute references to any value in the configuration via
+  dot-notation (e.g., `{personas.orion.mind.model}`).
+- **Reserved Identifiers**: `{__PARENT__}` resolves to the immediate parent node in the
+  configuration tree and `{__KEY__}` to a node's own key, so `{__PARENT__.__KEY__}` in a
   persona definition yields that persona's ID.
-- **Templated Keys**: dict *keys* may hold templates too, so a config section can be named from a
-  value (e.g., `"{{hid}}":` under `model_providers` yields `[model_providers.codex]`).
-- **Serializers**: a reference may end in `__AS_JSON__()`, `__AS_TOML__()`, or `__AS_YAML__()` to
-  render a whole subtree as a harness config file (e.g., `content: "{{config_store.__AS_JSON__()}}"`).
-- **Subscripts**: any segment may be indexed by another reference, resolved where the template is
-  written rather than where it points (e.g., `{{providers[chosen].url}}` is "the entry of
-  `providers` named by *my* `chosen`"). Subscripts chain, and index lists by position — `[1]`,
-  `[-1]` included.
-- **Functions**: a reference may instead *be* a call, `{{__NAME__(arg, ...)}}`, whose arguments are
-  themselves references. `__MATCH_FIRST__(key_set, items)` yields the first member of `key_set`
-  found among `items`' keys, reading the list as a preference order.
+- **Serializers**: a reference ending in `__AS_JSON__()`, `__AS_TOML__()`, `__AS_YAML__()`, or
+  `__AS_YAPYON__()` renders a subtree as a harness file (`content: y"{config_store.__AS_JSON__()}"`).
+  All four drop unset entries — `""`, `None`, empty maps — so the harness never sees a key the
+  persona left empty. `__AS_YAPYON__` is the one that also carries multimaps and bytes.
+- **Subscripts**: any segment may be indexed by another reference (e.g., `{providers[chosen].url}`
+  is "the entry of `providers` named by `chosen`"). Lists index by position — `[1]`, `[-1]` included.
+- **Functions**: `match_first(key_set, items)` yields the first member of `key_set` found among
+  `items`' keys, reading the list as a preference order; it is how a harness and a persona settle on
+  a dialect (`y"{match_first(supported_dialects, mind.dialects)}"`).
 
-Environment variables (`$FOO`, `${FOO}`) are also substituted, in a single pass, before the file
-is parsed. Write `$$` for a literal dollar sign — `$$HOME` yields the text `$HOME`.
+A y-string always produces text, so it can splice in a string, number, or `None`, but not a whole
+list or map. A list may hold y-strings as its items (`supported_dialects: [y"{preferred}"]`).
+Write `{{` or `}}` for a literal brace.
+
+Environment variables are read with `{$NAME}` — `y"{$HOME}/agents"` — and an unset one is an error
+rather than an empty string; `{__ENV__("NAME", "fallback")}` supplies a default instead. Only
+variables the store allows can be read (by default the standard ones such as `HOME` and `PATH`;
+see `env_allow` / `env_add` in the [Config Reference Manual](CONFIG_REFERENCE.md)). A plain string
+is never expanded: `"$HOME/agents"` stays exactly that text.
 
 For more about templates & configuration, see the [Config Reference Manual](CONFIG_REFERENCE.md).
 

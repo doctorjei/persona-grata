@@ -1,6 +1,6 @@
 """Persona setup workflow: resolve agents.yaml, then wire up a harness.
 
-All template resolution is delegated to :mod:`template_engine`; this module only
+All template resolution is delegated to yapyon (through :mod:`yapyon_io`); this module only
 assembles the layered configuration and consumes the resolved values to obtain
 and verify the API token, create directories, render the harness config file,
 and install a shell wrapper.
@@ -18,8 +18,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-import yaml
-from . import template_engine as te
+import yapyon
+from . import yapyon_io as yio
 
 __version__ = "0.0.4.dev0"
 
@@ -32,16 +32,19 @@ __version__ = "0.0.4.dev0"
 # process -- the test suites relocate the store by setting it. A value computed
 # once at import would stop tracking it and quietly pin the store.
 def _env_defaults():
-    """Fallbacks for the ``$VAR``s the schema uses, resolved against the environment.
+    """Defaults under the real environment for the variables our base file reads.
 
     The store's location is a three-step chain, and this supplies the last two
-    steps -- ``substitute_env`` prefers the real environment, so a set
-    ``$PERSONA_STORE_DIR`` wins before these are consulted at all::
+    steps -- :func:`yapyon_io.environment` lays the real environment *over* these,
+    so a set ``$PERSONA_STORE_DIR`` wins before they are consulted at all::
 
         $PERSONA_STORE_DIR -> $XDG_CONFIG_HOME/personas -> ~/.config/personas
 
-    Substituted text is not re-scanned (rule 1d), so the fallback has to be a
-    resolved path; ``"$XDG_CONFIG_HOME/personas"`` would survive as literal text.
+    The chain is computed here rather than written as ``__ENV__`` fallbacks in
+    ``agents.tmpl`` because the fallback paths need concatenation, which a call
+    argument cannot do -- and every helper key in that file would become a
+    schema key. ``agents.tmpl`` reads the strict ``{$PERSONA_STORE_DIR}``, so
+    a missing value is akan, never a silent literal.
     """
     home = Path.home()
     xdg = os.environ.get("XDG_CONFIG_HOME") or str(home / ".config")
@@ -60,9 +63,16 @@ DEFAULT_BODY = """{"model": "%s", "max_tokens": 16, "messages": [{"role": "user"
 
 DATA_DIR = Path(__file__).parent / "data"
 
-# The schema files use `None` to mean "unset" -- readable in a comment-heavy
-# reference file, but YAML 1.1 has no such token, so PyYAML hands it back as a
-# plain string. Normalize it (and its YAML-ish spellings) on load.
+# Strings that read back as "unset". This used to drive a load-time normalizer:
+# YAML 1.1 has no `none` token, so PyYAML handed it back as a plain string and
+# `_normalize_unset` turned it into a real ``None``.
+#
+# ⚠️ **That normalizer is gone.** On the yapyon path a bare `none`/`null` never
+# parses at all -- the lexer refuses it and says to write `None` -- so there is
+# nothing left to normalize. The set survives because it still has a job the
+# parser cannot do: a stand-in value written *quoted* (`"none"`) parses fine and
+# would then be a token a harness ships that reads as nothing. Tests assert
+# emitted stand-ins stay out of this set.
 _UNSET_TOKENS = {"none", "null"}
 
 USAGE = """\
@@ -154,21 +164,32 @@ _NAME_FLAG = "--name"
 
 # The id grammar, harmonized with kanibako's `agent_ref.parse_agent_ref`
 # (doctorjei/kanibako-cli), which consumes this store at
-# $XDG_CONFIG_HOME/personas/<pid>/<hid>/ and so shares these names. Letters and
-# digits in ANY language, plus `-` and `_`. One charset, enforced in one place.
+# $XDG_CONFIG_HOME/personas/<pid>/<hid>/ and so shares these names. Their rule
+# since kanibako 1.8.0 (`identifiers.name_flaw`): 1-64 ASCII letters, digits and
+# `_`, not starting with a digit. Adopted verbatim 2026-10-22 -- a name pg accepts
+# and kanibako refuses is a persona half the system cannot see. ASCII also makes
+# every command name a POSIX shell name. One charset, enforced in one place.
+#
+# `-` is FORBIDDEN (maintainer, 2026-10-12). An id is a key in the resolved tree,
+# and keys are meant to stay usable as identifiers -- dot-addressing in kanibako --
+# so they take what an identifier takes. Most languages read `foo-bar` as minus, so
+# yapyon's lexer bars it too; that bar is the format agreeing with us, not a gap.
 #
 # Two characters matter enough to name. `.` separates the segments of a template
 # reference, is how a preset filename yields its id, and -- since an id becomes a
 # directory -- is what lets `..` climb out of the store. `+` separates the halves
 # of a designation. Both fall out of the rule rather than being special-cased.
-_SAFE_EXTRA = frozenset("-_")
+_SAFE_EXTRA = frozenset("_")
+_NAME_MAX_LEN = 64
 
-# kanibako: "no real agent may be named default". Here the `<kind>.default.yaml`
+# kanibako: "no real agent may be named default". Here the `default.<kind>.tmpl`
 # files *are* the schema, so an id of `default` would name a preset that cannot
 # exist; `preset_names` already skips those files.
 _RESERVED_IDS = frozenset({"default"})
 
 _DOT_HINT = ("; '.' is reserved as a key-path separator and cannot appear in a name")
+_DASH_HINT = ("; '-' cannot appear in a name -- names are keys, and a key has to stay "
+              "usable as an identifier, which '-' breaks (it reads as minus)")
 
 
 def deep_merge(source, destination):
@@ -185,17 +206,6 @@ def deep_merge(source, destination):
     return destination
 
 
-def _normalize_unset(value):
-    """Rewrite the schema's ``None`` placeholder to a real ``None``."""
-    if isinstance(value, dict):
-        return {k: _normalize_unset(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_normalize_unset(v) for v in value]
-    if isinstance(value, str) and value.strip().lower() in _UNSET_TOKENS:
-        return None
-    return value
-
-
 def _ensure_dict(mapping, key):
     """``setdefault``, but an unset placeholder is replaced by a fresh dict."""
     value = mapping.get(key)
@@ -205,37 +215,97 @@ def _ensure_dict(mapping, key):
     return value
 
 
-def load_yaml(path, env_defaults=None):
-    """Read text -> substitute env vars -> parse YAML -> normalize placeholders."""
+def load_user_config(path):
+    """Read a *user's* config file: a yapyon document, parsed, with env settled.
+
+    This was YAML, and stayed YAML on the grounds that the file belongs to the
+    user and they wrote it in the format they already know. **That is
+    reversed.** A user file is now a yapyon document, the same format the
+    shipped presets are, so one grammar covers every file this tool reads and a
+    reference written in a preset means the same thing written in an
+    ``agents.yaml``.
+
+    ⚠️ **What that costs, in the user's own file.** Constructs YAML allowed and
+    yapyon refuses now fail at parse time with an :class:`yapyon.AkanError`
+    naming the line and what to write instead:
+
+      ``~``  ·  bare ``null`` / ``none`` (write ``None``)  ·  bare ``true`` /
+      ``false`` (write ``True`` / ``False``)  ·  a key with no value and no
+      indented block  ·  block scalars ``|`` and ``>``  ·  ``---`` separators  ·
+      duplicate keys  ·  tab indentation  ·  quoted keys ``"foo":``  ·  dotted
+      keys ``a.b:``  ·  anchors and aliases  ·  an empty file
+
+    Comments, flow maps and sequences, quoting, numbers and ``None`` are all
+    fine. Every one of those refusals is **loud, on load** -- which is the point:
+    the old path let a mistyped reference pass as literal text and ship. The
+    break is written up in the 0.0.4 notes.
+
+    Nothing is resolved here -- environment included. ``{$FOO}`` is a hole, and
+    it is settled with everything else in the final pass, which may read only
+    what ``persona_store.cfg`` allows (``env_allow`` / ``env_add``) plus the
+    reserved three. ⚠️ ``$FOO`` written in a *plain* string is ordinary text now
+    and stays as written; the 0.0.4 notes say so.
+
+    Returns ``None`` when the file is absent, so callers keep their ``or {}``.
+    Our own presets are read by :func:`load_template`; both go to the same
+    loader now, they differ only in what they expect to find.
+    """
     if not Path(path).exists():
         return None
-    raw = Path(path).read_text()
-    substituted = te.substitute_env(raw, env_defaults)
-    return _normalize_unset(yaml.safe_load(substituted))
+    return yio.load(path)
+
+
+def load_template(path):
+    """Read one of *our* presets: yapyon, parsed and nothing more.
+
+    Resolving happens once, later, on the assembled document -- see
+    :func:`yapyon_io.resolve_document`. Resolving per file would bind each
+    preset against itself and silently miss every cross-file reference.
+    """
+    return yio.load(path)
+
+
+def kind_dir(kind):
+    """The directory a kind's presets live in: ``data/<kind>/``."""
+    return DATA_DIR / kind
+
+
+def default_path(kind):
+    """A kind's schema default: ``data/<kind>/default.<kind>.tmpl``.
+
+    The same ``<id>.<kind>.tmpl`` shape as every other preset, with ``default``
+    as the id -- so the default is found the same way its siblings are, not by
+    a special case that can drift from them.
+    """
+    return kind_dir(kind) / f"default.{kind}.tmpl"
 
 
 def preset_names(kind):
-    """Sorted ids of the ``<kind>.<id>.yaml`` presets shipped in ``data/``."""
-    return sorted(f.stem.split(".", 1)[1] for f in DATA_DIR.glob(f"{kind}.*.yaml")
-                  if f.stem != f"{kind}.default")
+    """Sorted ids of the ``<id>.<kind>.tmpl`` presets shipped in ``data/<kind>/``.
+
+    The id is the part *before* the first dot, and ``default`` is excluded: it
+    is the schema, not a shippable preset.
+    """
+    return sorted(f.stem.split(".", 1)[0] for f in kind_dir(kind).glob(f"*.{kind}.tmpl")
+                  if f.stem != f"default.{kind}")
 
 
-def _load_preset(kind, name, env_defaults, schema_keys):
-    """Load ``data/<kind>.<name>.yaml``, unwrapping its self-named outer block.
+def _load_preset(kind, name, schema_keys):
+    """Load ``data/<kind>/<name>.<kind>.tmpl``, unwrapping its self-named outer block.
 
     Presets wrap their body in their own id so that a block can be pasted
     straight into an ``agents.yaml``; the layering merges the *body*, so the
     wrapper is stripped here. A wrapper that disagrees with the filename is an
     authoring mistake and is reported rather than silently merged as a stray key.
     """
-    data = load_yaml(DATA_DIR / f"{kind}.{name}.yaml", env_defaults)
+    data = load_template(kind_dir(kind) / f"{name}.{kind}.tmpl")
     if not isinstance(data, dict):
         return {}
     if len(data) == 1:
         (key, body), = data.items()
         if key not in schema_keys:
             if key != name:
-                sys.exit(f"Error: {kind} preset '{name}.yaml' wraps its settings in "
+                sys.exit(f"Error: {kind} preset '{name}.{kind}.tmpl' wraps its settings in "
                          f"'{key}:', which does not match its id '{name}'.")
             return body if isinstance(body, dict) else {}
     return data
@@ -253,18 +323,18 @@ def _normalize_personas(user_cfg):
     return user_cfg
 
 
-def declared_personas(path, env_defaults=None):
+def declared_personas(path):
     """Persona names the user's file asks for, in order (empty when there is none)."""
     if path is None:
         return []
-    user_cfg = load_yaml(path, env_defaults if env_defaults is not None else _env_defaults())
+    user_cfg = load_user_config(path)
     if not isinstance(user_cfg, dict):
         return []
     return list(_normalize_personas(user_cfg)["personas"])
 
 
 def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dialect_schema,
-                     secret_schema):
+                     secret_schema, source=None):
     """Warn about settings keys the schema does not define.
 
     A misspelled key is otherwise silent: it merges into the tree, nothing reads
@@ -301,8 +371,10 @@ def _warn_unknown_keys(user_cfg, top_schema, persona_schema, harness_schema, dia
                 continue
             check(harness, harness_schema, f"personas.{pid}.harnesses.{hid}.")
 
+    where = f" in {source}" if source else ""
     for path in warnings:
-        print(f"Warning: unknown setting '{path}' — ignored (check spelling).", file=sys.stderr)
+        print(f"Warning: unknown setting '{path}'{where} — ignored (check spelling).",
+              file=sys.stderr)
     return warnings
 
 
@@ -314,9 +386,21 @@ def _id_error(kind, value):
     """
     if not isinstance(value, str) or not value:
         return f"a {kind} name cannot be empty"
-    if not all(ch.isalnum() or ch in _SAFE_EXTRA for ch in value):
-        return (f"invalid {kind} name '{value}': names may contain only letters and digits "
-                f"(any language), '-', and '_'{_DOT_HINT if '.' in value else ''}")
+    if len(value) > _NAME_MAX_LEN:
+        return f"invalid {kind} name '{value}': names are at most {_NAME_MAX_LEN} characters"
+    if not all(ch.isascii() and (ch.isalnum() or ch in _SAFE_EXTRA) for ch in value):
+        hints = ""
+        if "." in value:
+            hints += _DOT_HINT
+        if "-" in value:
+            hints += _DASH_HINT
+        return (f"invalid {kind} name '{value}': names may contain only ASCII letters, "
+                f"digits and '_'{hints}")
+    # A name becomes a shell function, and no shell accepts one that starts with
+    # a digit -- the same rule a key in a file is already held to by yapyon.
+    if not (value[0].isalpha() or value[0] == "_"):
+        return (f"invalid {kind} name '{value}': names must begin with a letter "
+                f"or '_', not '{value[0]}'")
     if value in _RESERVED_IDS:
         return f"invalid {kind} name '{value}': '{value}' is reserved"
     return None
@@ -435,23 +519,44 @@ def _expand_ids(preset_entries, declared, known):
     return [name for name in ids if state.get(name, {}) is not None]
 
 
-def harness_names(pid, path=None, env_defaults=None, overrides=None):
+def _locate_store(user_cfg, base_cfg, env_defaults):
+    """Where the store is: the user's `persona_store` if set, else the default.
+
+    The user's value is settled in place. Bootstrap (ruled 2026-10-21): it is
+    read with the *standard* environment, because the user's list of what else
+    to expose lives in the store's own file, which cannot be found without it.
+    """
+    if "persona_store" in user_cfg:
+        user_cfg["persona_store"] = yio.settle(user_cfg["persona_store"],
+                                               yio.RESERVED_ENV | yapyon.STANDARD_ENV,
+                                               env_defaults)
+    return user_cfg.get("persona_store") or base_cfg.get("persona_store")
+
+
+def harness_names(pid, path=None, overrides=None):
     """Which harnesses a persona would be set up with, without building any.
 
     Lets the CLI validate a harness name and enumerate "all of them" before
     anything is resolved -- the point being that an unbuildable pairing should
     be reported as such rather than blowing up template resolution.
     """
-    if env_defaults is None:
-        env_defaults = _env_defaults()
-    user_cfg = _normalize_personas(load_yaml(path, env_defaults) or {} if path else {})
+    user_cfg = _normalize_personas(load_user_config(path) or {} if path else {})
     if overrides:
         deep_merge(_normalize_personas(copy.deepcopy(overrides)), user_cfg)
-    declared = user_cfg["personas"].get(pid)
-    declared = declared.get("harnesses") if isinstance(declared, dict) else None
+    # The store declares harnesses too, one tier under the user's file -- the
+    # same layering load_config gives them, or a harness the store adds could be
+    # built but not named.
+    env_defaults = _env_defaults()
+    base_cfg = yio.load_resolved(DATA_DIR / "agents.tmpl", yio.RESERVED_ENV, env_defaults) or {}
+    store_personas = store_config(_locate_store(user_cfg, base_cfg, env_defaults)).get("personas")
+    declared = None
+    for block in ((store_personas or {}).get(pid) if isinstance(store_personas, dict) else None,
+                  user_cfg["personas"].get(pid)):
+        if isinstance(block, dict) and isinstance(block.get("harnesses"), dict):
+            declared = deep_merge(copy.deepcopy(block["harnesses"]), declared or {})
 
-    persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
-    preset = _load_preset("persona", pid, env_defaults, persona_default)
+    persona_default = load_template(default_path("persona")) or {}
+    preset = _load_preset("persona", pid, persona_default)
     return _expand_ids(preset.get("harnesses") or {}, declared, preset_names("harness"))
 
 
@@ -489,7 +594,7 @@ def _check_dialects(config, targets=None):
     A harness's ``supported_dialects`` and the keys of the persona's
     ``mind.dialects`` are literal strings at this point, so an unbuildable
     pairing can be refused the way an unknown harness is -- rather than
-    surfacing later as a ``TemplateError`` about ``__MATCH_FIRST__``, which
+    surfacing later as an ``AkanError`` from ``match_first()``, which
     names nothing the user can act on.
 
     Two different failures, deliberately handled differently:
@@ -521,15 +626,15 @@ def _check_dialects(config, targets=None):
             if not isinstance(harness, dict):
                 continue
             supported = harness.get("supported_dialects")
+            # Either side may be templated -- exotic, but legal. Nothing can be
+            # compared until the tree resolves, so leave those to match_first()
+            # rather than guessing at a mismatch.
+            if yio.holds_ystring(supported) or yio.holds_ystring(list(offered)):
+                continue
             if not supported or not isinstance(supported, list):
                 sys.exit(f"Error: harness '{hid}' declares no 'supported_dialects', so there "
                          f"is no protocol for it to speak to persona '{pid}' with. List the "
                          f"wire protocols it can speak, best first; '{pid}' serves {serves}.")
-            # Either side may be templated -- exotic, but legal. Nothing can be
-            # compared until the tree resolves, so leave those to __MATCH_FIRST__
-            # rather than guessing at a mismatch.
-            if te._holds_template(supported) or te._holds_template(list(offered)):
-                continue
             if any(did in offered for did in supported):
                 continue
             if named:
@@ -544,7 +649,7 @@ def _check_dialects(config, targets=None):
                      + "; ".join(f"{hid} speaks {spoken}" for hid, spoken in refused.items())
                      + ".")
         for hid, spoken in refused.items():
-            print(f"Note: skipping {pid}-{hid} — {hid} speaks {spoken}, and {pid} serves "
+            print(f"Note: skipping {pid}_{hid} — {hid} speaks {spoken}, and {pid} serves "
                   f"{serves}.", file=sys.stderr)
     return config
 
@@ -588,7 +693,7 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     # 1. User config -- optional; the shipped presets alone are a usable config.
     user_cfg = {}
     if path is not None:
-        user_cfg = load_yaml(path, env_defaults)
+        user_cfg = load_user_config(path)
         if user_cfg is None:
             sys.exit(f"Error: Configuration file {path} not found.")
         if not isinstance(user_cfg, dict):
@@ -603,8 +708,14 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     _check_ids(user_cfg)
     users_personas = user_cfg["personas"]
 
-    # 2. Global defaults.
-    base_cfg = load_yaml(DATA_DIR / "agents.default.yaml", env_defaults) or {}
+    # 2. Global defaults -- the one file resolved on its own, before assembly.
+    #    It is ours, it reads only the reserved environment, and `persona_store`
+    #    has to be a real path before the store's own settings can be found.
+    #    The top-level schema is taken *here*, before the store's settings are
+    #    merged in: taken after, a stray key in persona_store.cfg became "known"
+    #    and a typo of it in the user's file stopped warning.
+    base_cfg = yio.load_resolved(DATA_DIR / "agents.tmpl", yio.RESERVED_ENV, env_defaults) or {}
+    top_schema = set(base_cfg) | {"personas"}
     base_personas = _ensure_dict(base_cfg, "personas")
 
     # 2a. The store's own settings, layered between what we ship and what the
@@ -612,17 +723,26 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     # Read from wherever the store actually is -- the user's `persona_store` if
     # they set one, the environment chain otherwise -- so the settings travel
     # with the store rather than being pinned to the standard path.
-    store_cfg = store_config(user_cfg.get("persona_store") or base_cfg.get("persona_store"),
-                             env_defaults)
+    # Bootstrap (ruled 2026-10-21): the user's own `persona_store` and the store
+    # file are read with the *standard* environment, because the user's list of
+    # what else to expose lives in that very file.
+    store = _locate_store(user_cfg, base_cfg, env_defaults)
+    store_cfg = store_config(store)
+    authored_store_cfg = copy.deepcopy(store_cfg)
+    document_env = _document_env(store_cfg, user_cfg, store)
+    # Its personas are held back rather than merged here: merged into the
+    # top-level defaults, every shipped persona preset layered over them and a
+    # store-wide tweak to `kimi` was silently lost. They are declared like the
+    # user's own, one tier below (step 3 and step 4).
+    store_personas = {}
     if store_cfg:
         store_personas = _ensure_dict(store_cfg, "personas")
-        deep_merge(store_personas, base_personas)
         deep_merge({k: v for k, v in store_cfg.items() if k != "personas"}, base_cfg)
 
-    persona_default = load_yaml(DATA_DIR / "persona.default.yaml", env_defaults) or {}
-    harness_default = load_yaml(DATA_DIR / "harness.default.yaml", env_defaults) or {}
-    dialect_default = load_yaml(DATA_DIR / "dialect.default.yaml", env_defaults) or {}
-    secret_default = load_yaml(DATA_DIR / "secret.default.yaml", env_defaults) or {}
+    persona_default = load_template(default_path("persona")) or {}
+    harness_default = load_template(default_path("harness")) or {}
+    dialect_default = load_template(default_path("dialect")) or {}
+    secret_default = load_template(default_path("secret")) or {}
     known_harnesses = preset_names("harness")
     known_dialects = preset_names("dialect")
     known_backends = preset_names("secret")
@@ -631,17 +751,22 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     # a typo that would otherwise fail silently. pid/hid are injected, not
     # authored, and `mind.dialects` is seeded from the dialect registry rather
     # than declared in persona.default.yaml -- but the user may still write it.
-    _warn_unknown_keys(user_cfg,
-                       set(base_cfg) | {"personas"},
-                       {**persona_default, "pid": None,
-                        "mind": {**(persona_default.get("mind") or {}), "dialects": None}},
-                       {**harness_default, "hid": None},
-                       dialect_default,
-                       secret_default)
+    schemas = (top_schema,
+               {**persona_default, "pid": None,
+                "mind": {**(persona_default.get("mind") or {}), "dialects": None}},
+               {**harness_default, "hid": None},
+               dialect_default,
+               secret_default)
+    _warn_unknown_keys(user_cfg, *schemas)
+    if authored_store_cfg:
+        _warn_unknown_keys(authored_store_cfg, top_schema | set(_ENV_SETTINGS), *schemas[1:],
+                           source=store_config_path(store))
 
-    # 3. Layer every persona: shipped presets plus whatever the user declared.
-    for pid in dict.fromkeys(preset_names("persona") + list(users_personas)):
-        preset = _load_preset("persona", pid, env_defaults, persona_default)
+    # 3. Layer every persona: shipped presets plus whatever the store and the
+    #    user declared.
+    for pid in dict.fromkeys(preset_names("persona") + list(store_personas)
+                             + list(users_personas)):
+        preset = _load_preset("persona", pid, persona_default)
         # A persona preset may also carry per-harness overrides and per-dialect
         # mounts; both are more specific than their own presets, so they are
         # layered separately below rather than merged in with the rest.
@@ -656,8 +781,11 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         persona_layer["pid"] = pid
         persona = deep_merge(persona_layer, _ensure_dict(base_personas, pid))
 
-        declared = users_personas.get(pid)
-        declared = declared if isinstance(declared, dict) else {}
+        # What was declared for this persona, the store's block under the user's.
+        declared = {}
+        for block in (store_personas.get(pid), users_personas.get(pid)):
+            if isinstance(block, dict):
+                deep_merge(copy.deepcopy(block), declared)
 
         # Dialect expansion: the registry says what each protocol looks like,
         # the persona says where it is mounted. Always built -- an endpoint
@@ -667,7 +795,7 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         dialect_map = _ensure_dict(_ensure_dict(persona, "mind"), "dialects")
         for did in _expand_ids(preset_dialects, declared_mind.get("dialects"), known_dialects):
             dialect_layer = copy.deepcopy(dialect_default)
-            deep_merge(_load_preset("dialect", did, env_defaults, dialect_default), dialect_layer)
+            deep_merge(_load_preset("dialect", did, dialect_default), dialect_layer)
             if isinstance(preset_dialects.get(did), dict):
                 deep_merge(preset_dialects[did], dialect_layer)
             deep_merge(dialect_layer, _ensure_dict(dialect_map, did))
@@ -686,7 +814,7 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         harness_map = _ensure_dict(persona, "harnesses")
         for hid in harness_ids:
             harness_layer = copy.deepcopy(harness_default)
-            deep_merge(_load_preset("harness", hid, env_defaults, harness_default), harness_layer)
+            deep_merge(_load_preset("harness", hid, harness_default), harness_layer)
             if isinstance(preset_harnesses.get(hid), dict):
                 deep_merge(preset_harnesses[hid], harness_layer)
             harness_layer["hid"] = hid
@@ -703,6 +831,12 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         backend = (user_cfg.get("secret_backend")
                    if "secret_backend" in user_cfg
                    else base_cfg.get("secret_backend"))
+        # "No backend" is spelled two ways on purpose: the schema says `None` and
+        # a config may say `{}`. Both mean unset -- a backend is a *name*, and an
+        # empty mapping names nothing. Normalised here so the three `is not None`
+        # checks below stay correct.
+        if not backend:
+            backend = None
         if backend is not None and backend not in known_backends:
             sys.exit(f"Error: secret_backend '{backend}' is unknown "
                      f"(known: {', '.join(known_backends)}).")
@@ -710,13 +844,11 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
         # user's own block joins here too rather than only in the step-4 merge,
         # so the materialized mapping always carries the full key set and the
         # step-4 pass merely re-applies the same values.
-        blocks = [persona.get("secret")]
-        if isinstance(declared, dict):
-            blocks.append(declared.get("secret"))
+        blocks = [persona.get("secret"), declared.get("secret")]
         if backend is not None or any(isinstance(block, dict) for block in blocks):
             secret_layer = copy.deepcopy(secret_default)
             if backend is not None:
-                deep_merge(_load_preset("secret", backend, env_defaults, secret_default),
+                deep_merge(_load_preset("secret", backend, secret_default),
                            secret_layer)
             for block in blocks:
                 if isinstance(block, dict):
@@ -725,7 +857,9 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
                 secret_layer["backend"] = backend
             persona["secret"] = secret_layer
 
-    # 4. User overrides go on last, so they beat every default and preset.
+    # 4. Declarations go on last, so they beat every default and preset: the
+    #    store's personas, then the user's file over them.
+    deep_merge({"personas": store_personas}, base_cfg)
     deep_merge(user_cfg, base_cfg)
 
     # 5. Drop anything switched off, and anything outside the targets, before
@@ -737,8 +871,51 @@ def load_config(path=None, env_defaults=None, overrides=None, targets=None):
     _select_targets(base_cfg, targets)
     _check_dialects(base_cfg, targets)
 
-    # 6. Template resolution.
-    return te.resolve_tree(base_cfg)
+    # 6. Resolution: one yapyon pass over the whole assembled document, reading
+    #    only the environment the store allows the user's documents to see.
+    return yio.resolve_document(base_cfg, env_defaults, env_allow=document_env)
+
+
+#: The two store settings that widen or replace what documents may read from
+#: the environment. Store-only (ruled 2026-10-21): what a document may see is a
+#: property of the store, like `secret_backend`, not of one invocation's file.
+_ENV_SETTINGS = ("env_allow", "env_add")
+
+#: A portable environment-variable name (POSIX.1-2017 §8.1) -- which is also
+#: exactly yapyon's bare-key grammar, so `{$NAME}` can spell every one of them.
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _document_env(store_cfg, user_cfg, store):
+    """What the user's documents may read: ``RESERVED_ENV | env_allow | env_add``.
+
+    ``env_allow`` replaces the base list (default: ``yapyon.STANDARD_ENV``) and
+    ``env_add`` extends it (default: nothing); both come from
+    ``persona_store.cfg`` and are taken *out* of it here, since they are read,
+    not layered. The reserved three are always in -- persona-grata needs them to
+    find the store at all -- so no list can remove them.
+    """
+    where = store_config_path(store)
+    for key in _ENV_SETTINGS:
+        if key in user_cfg:
+            sys.exit(f"Error: '{key}' is a store setting; put it in {where}, "
+                     f"not in the agents file.")
+    lists = {}
+    for key in _ENV_SETTINGS:
+        value = store_cfg.pop(key, None) if store_cfg else None
+        if value is None:
+            lists[key] = None
+            continue
+        if not isinstance(value, list) or not all(isinstance(n, str) for n in value):
+            sys.exit(f"Error: {where}: '{key}' must be a list of variable names, "
+                     f'like ["MY_ENDPOINT"].')
+        bad = [n for n in value if not _ENV_NAME.fullmatch(n)]
+        if bad:
+            sys.exit(f"Error: {where}: '{key}' holds {', '.join(map(repr, bad))}, which "
+                     f"cannot be an environment variable name.")
+        lists[key] = frozenset(value)
+    allow = lists["env_allow"] if lists["env_allow"] is not None else yapyon.STANDARD_ENV
+    return yio.RESERVED_ENV | allow | (lists["env_add"] or frozenset())
 
 
 def _require(mapping, key, kind):
@@ -1115,10 +1292,10 @@ def store_config_path(store):
     return _path(store) / _STORE_CFG_FILE if store else None
 
 
-def store_config(store, env_defaults=None):
+def store_config(store):
     """Settings held by the store itself, or ``{}`` if it has none.
 
-    Read with :func:`load_yaml` rather than a plain parse, unlike the name
+    Read with :func:`load_user_config` rather than a plain parse, unlike the name
     registry: this file is *authored*, so a ``$VAR`` in it should expand the way
     one in an ``agents.yaml`` does. It is also hand-editable and rarely written,
     which is why it is a separate file from ``agent_names.cfg`` -- that one is
@@ -1132,15 +1309,118 @@ def store_config(store, env_defaults=None):
     if path is None or not path.exists():
         return {}
     try:
-        data = load_yaml(path, env_defaults if env_defaults is not None else _env_defaults())
-    except (OSError, yaml.YAMLError):
+        data = load_user_config(path)
+    except (OSError, yapyon.AkanError):
         print(f"Warning: cannot read {path}; ignoring the store's settings.", file=sys.stderr)
         return {}
     if not isinstance(data, dict):
         print(f"Warning: {path} is not a mapping; ignoring the store's settings.",
               file=sys.stderr)
         return {}
+    # This file is found BY the store's location, so it cannot set it: obeyed, it
+    # read settings from one store and built personas in another (ruled out
+    # 2026-10-23; a pointer inside the store was rejected 2026-09-11 for kanibako).
+    if "persona_store" in data:
+        sys.exit(f"Error: {path} cannot set 'persona_store' -- this file is found by the "
+                 f"store's location. Relocate the store with $PERSONA_STORE_DIR or "
+                 f"'persona_store' in your agents file.")
     return data
+
+
+def _store_settings():
+    """The keys :func:`write_store_setting` may write: store-wide settings only.
+
+    The top-level schema from ``agents.tmpl`` minus what is not a store setting
+    (``personas`` are the user's to write; ``persona_store`` cannot live inside
+    the store it locates), plus the store-only environment settings.
+    """
+    schema = yio.load(DATA_DIR / "agents.tmpl") or {}
+    return (set(schema) - {"personas", "persona_store"}) | set(_ENV_SETTINGS)
+
+
+def _comment_start(line):
+    """Index of the ``#`` opening a trailing comment in *line*, or ``None``.
+
+    A ``#`` inside a quoted string is text, and so is one not preceded by
+    whitespace -- the same reading yapyon gives it.
+    """
+    quote = None
+    escaped = False
+    for i, ch in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\" and quote == '"':
+                escaped = True
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+            return i
+    return None
+
+
+def write_store_setting(store, key, value):
+    """Set one top-level setting in the store's ``persona_store.cfg``, as text.
+
+    The file is hand-edited and mostly comments, so it is never re-serialized:
+    an existing ``key:`` line keeps its trailing comment and only its value
+    changes (an indented block under it goes with it), a new key is appended,
+    and every other line -- comments, blank lines, order -- is left as written.
+    A missing file is created.
+
+    The result is written beside the file, reloaded, and moved into place only
+    if it reads back to *value*; otherwise the store is left exactly as it was
+    and ``ValueError`` names why. A store setting is never a way around the
+    schema: unknown keys are refused, not written.
+    """
+    if key not in _store_settings():
+        raise ValueError(f"'{key}' is not a store setting "
+                         f"(known: {', '.join(sorted(_store_settings()))})")
+    path = store_config_path(store)
+    if path is None or not path.parent.is_dir():
+        raise ValueError(f"no persona store at {store}")
+    text = path.read_text() if path.exists() else (
+        "# Settings for this persona store, shared by every persona in it.\n")
+    lines = text.splitlines(keepends=True)
+
+    inline = yio._inline(value)
+    head = re.compile(rf"{re.escape(key)}[ \t]*:")
+    at = next((i for i, line in enumerate(lines) if head.match(line)), None)
+    if at is None:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(yio.emit_config({key: value}))
+    else:
+        # The block: indented lines under the key, through blank lines between them.
+        end = at + 1
+        for j in range(at + 1, len(lines)):
+            if lines[j].strip() and lines[j][:1] in " \t":
+                end = j + 1
+            elif lines[j].strip():
+                break
+        old = lines[at].rstrip("\n")
+        cut = _comment_start(old)
+        new = f"{key}: {inline}" if inline is not None else f"{key}:"
+        if cut is not None:
+            # Same column as before where it fits, so aligned comments stay aligned.
+            new += " " * max(cut - len(new), 1) + old[cut:]
+        if inline is not None:
+            lines[at:end] = [new + "\n"]
+        else:
+            lines[at:end] = [new + "\n" + yio.emit_config({key: value}).split("\n", 1)[1]]
+
+    staged = path.with_name(path.name + ".new")
+    staged.write_text("".join(lines))
+    try:
+        reloaded = load_user_config(staged)
+        if not isinstance(reloaded, dict) or reloaded.get(key) != value:
+            raise ValueError(f"{path} would not read back '{key}' as written")
+    except (yapyon.AkanError, ValueError) as error:
+        staged.unlink()
+        raise ValueError(f"not written: {error}") from None
+    os.replace(staged, path)
 
 
 # --------------------------------------------------------------------------- #
@@ -1152,7 +1432,7 @@ _NAMES_HEADER = """\
 # Chosen agent names, written by persona-grata. Each entry maps a name to the
 # designation of the agent it invokes:
 #
-#     <name>: <persona>+<harness>
+#     <name>: "<persona>+<harness>"
 #
 # An agent's name defaults to its designation and needs no entry here; only a
 # name chosen with --name is recorded. A name REPLACES the default command, so
@@ -1177,15 +1457,26 @@ def agent_names(config):
 
     Runtime state, not schema: naming an agent does not edit anyone's
     ``agents.yaml``, which matches "a definition is ephemeral unless exported".
-    Read with a plain parse rather than :func:`load_yaml` -- this is a machine-
+    Read with a plain parse rather than :func:`load_user_config` -- this is a machine-
     written file, and a ``$VAR`` in an agent's name should stay text.
+
+    Before 0.0.4 the file was YAML, written unquoted (``scout: orion+claude``),
+    which yapyon refuses. Ours is the only writer, so such a file is recognised
+    line by line and rewritten in the current form rather than lost.
     """
     path = _names_path(config)
     if path is None or not path.exists():
         return {}
     try:
-        data = yaml.safe_load(path.read_text())
-    except (OSError, yaml.YAMLError):
+        data = yio.load(path)
+    except yapyon.AkanError:
+        data = _legacy_agent_names(path)
+        if data is not None:
+            _save_agent_names(config, data)
+            return data
+        print(f"Warning: cannot read {path}; ignoring chosen names.", file=sys.stderr)
+        return {}
+    except OSError:
         print(f"Warning: cannot read {path}; ignoring chosen names.", file=sys.stderr)
         return {}
     names = {}
@@ -1196,12 +1487,32 @@ def agent_names(config):
     return names
 
 
+_LEGACY_NAME_LINE = re.compile(r"([A-Za-z0-9_]+):[ \t]*([A-Za-z0-9_]+)\+([A-Za-z0-9_]+)[ \t]*")
+
+
+def _legacy_agent_names(path):
+    """A pre-0.0.4 registry as ``{name: (persona, harness)}``, or ``None`` if not one.
+
+    Every line must be a comment, blank, or exactly what the old writer wrote;
+    anything else means the file is not ours to reinterpret.
+    """
+    names = {}
+    for line in path.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = _LEGACY_NAME_LINE.fullmatch(line)
+        if not match:
+            return None
+        names[match[1]] = (match[2], match[3])
+    return names
+
+
 def _save_agent_names(config, names):
     path = _names_path(config)
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = "".join(f"{name}: {pid}+{hid}\n"
+    body = "".join(f'{name}: "{pid}+{hid}"\n'
                    for name, (pid, hid) in sorted(names.items()))
     path.write_text(_NAMES_HEADER + ("\n" + body if body else ""))
 
@@ -1279,7 +1590,7 @@ def setup_harness(persona_id, harness_id, config, key=None, name=None):
     token_path = _path(persona["token"]) if persona.get("token") else None
 
     harness_desc = harness.get("harness_desc") or harness_id
-    agent_desc = harness.get("agent_desc") or f"{persona_id}-{harness_id}"
+    agent_desc = harness.get("agent_desc") or f"{persona_id}_{harness_id}"
     config_dir = harness.get("path")
     if not config_dir:
         sys.exit(f"Error: harness '{harness_id}' resolved an empty 'path'.")
@@ -1423,8 +1734,10 @@ def _install_shell_wrapper(persona_id, persona_desc, harness_id, harness_desc,
     rc_file = _rc_file()
     # The command is the agent's NAME. Absent a chosen one that is the
     # designation, rendered shell-safe: a function name cannot contain '+', so
-    # `kimi+claude` is installed as `kimi-claude`.
-    cmd_name = name or f"{persona_id}-{harness_id}"
+    # `kimi+claude` is installed as `kimi_claude`. `_`, not `-` (2026-10-22): the
+    # command is a name, and names follow the id rule, which has no `-` -- so
+    # every default command is a POSIX shell name.
+    cmd_name = name or f"{persona_id}_{harness_id}"
     agent_desc = agent_desc or cmd_name
 
     # Only emit assignments the harness actually uses; an empty name would
@@ -1523,7 +1836,7 @@ def remove_harness(persona_id, harness_id, config):
 
     persona_desc = persona.get("persona_desc") or persona_id
     harness_desc = harness.get("harness_desc") or harness_id
-    agent_desc = harness.get("agent_desc") or f"{persona_id}-{harness_id}"
+    agent_desc = harness.get("agent_desc") or f"{persona_id}_{harness_id}"
 
     print(f"\nRemoving {agent_desc} ({persona_desc} & {harness_desc})")
 
@@ -1677,7 +1990,7 @@ def _interview(persona, harnesses, definition, export_path, config_path, known,
         elif not keyed:
             # Switched off and being switched back on. Take the location from
             # the schema rather than keeping a second copy of it here.
-            schema = load_yaml(DATA_DIR / "persona.default.yaml", _env_defaults()) or {}
+            schema = load_template(default_path("persona")) or {}
             definition["token"] = schema.get("token")
 
     # Export sets nothing up, so in that mode there is no harness to choose.
@@ -1709,7 +2022,7 @@ def _interview(persona, harnesses, definition, export_path, config_path, known,
         save_path = _ask("File", config_path or "agents.yaml")
 
     action = (f"Write '{persona}' to {export_path}?" if export_path else
-              "Set up " + ", ".join(f"{persona}-{hid}" for hid in harnesses) + "?")
+              "Set up " + ", ".join(f"{persona}_{hid}" for hid in harnesses) + "?")
     if not _confirm(action, default=True):
         return None
     return persona, definition, harnesses, save_path
@@ -1752,7 +2065,7 @@ def _looks_like_config(arg):
     file in the working directory cannot turn ``pg kimi`` into a request to
     load a config named "kimi".
     """
-    return arg.endswith((".yaml", ".yml"))
+    return arg.endswith((".yaml", ".yml", ".yap", ".tmpl"))
 
 
 def _extract_options(args):
@@ -1816,18 +2129,14 @@ def _for_config_file(definition):
     """A flag definition as it should read *in* an agents.yaml.
 
     Ordered to match the schema rather than the order the flags happened to be
-    typed in, and unset written as the schema's ``None`` placeholder rather than
-    YAML's ``null`` -- both spellings load back to the same thing, but only one
-    matches every other file in the project.
+    typed in. Values pass through untouched: :func:`yio.emit_config` writes unset
+    as the schema's ``None`` and a deferred y-string as its own source spelling
+    (``y"{x}"``), which is what a user's agents.yaml -- a yapyon document --
+    reads back.
     """
-    def placeholders(value):
-        if isinstance(value, dict):
-            return {k: placeholders(v) for k, v in value.items()}
-        return "None" if value is None else value
-
     order = ("persona_desc", "path", "token", "mind", "harnesses")
     ranked = sorted(definition, key=lambda k: (order.index(k) if k in order else len(order), k))
-    return {key: placeholders(definition[key]) for key in ranked}
+    return {key: definition[key] for key in ranked}
 
 
 def _authored_definition(persona_id, config_path, definition):
@@ -1838,11 +2147,11 @@ def _authored_definition(persona_id, config_path, definition):
     template is the handful of settings someone would have written by hand, so
     an existing agent exports as something recognisably like its own preset.
     """
-    schema = load_yaml(DATA_DIR / "persona.default.yaml", _env_defaults()) or {}
+    schema = load_template(default_path("persona")) or {}
     authored = {}
-    deep_merge(_load_preset("persona", persona_id, _env_defaults(), schema), authored)
+    deep_merge(_load_preset("persona", persona_id, schema), authored)
     if config_path:
-        declared = _normalize_personas(load_yaml(config_path, _env_defaults()) or {})["personas"]
+        declared = _normalize_personas(load_user_config(config_path) or {})["personas"]
         if isinstance(declared.get(persona_id), dict):
             deep_merge(declared[persona_id], authored)
     deep_merge(definition, authored)          # the flags are the last word
@@ -1852,8 +2161,8 @@ def _authored_definition(persona_id, config_path, definition):
 def _export_definition(path, persona_id, definition):
     """Write a persona definition out as an editable config template.
 
-    Edited as text rather than re-serialized, because PyYAML cannot round-trip
-    comments and a hand-written agents.yaml is mostly comments. The block goes
+    Edited as text rather than re-serialized, because a hand-written agents.yaml
+    is mostly comments and a re-serialization would drop them. The block goes
     directly under ``personas:`` -- appending to the end of the file would land
     outside that mapping whenever it is not the last thing in the file.
 
@@ -1862,10 +2171,8 @@ def _export_definition(path, persona_id, definition):
     ``personas`` written in flow or shorthand form (no line to insert after).
     """
     body = Path(path).read_text() if Path(path).exists() else ""
-    existing = load_yaml(path) or {}
-    block = yaml.safe_dump({persona_id: _for_config_file(definition)},
-                           default_flow_style=False, sort_keys=False,
-                           allow_unicode=True, width=te._NO_WRAP)
+    existing = load_user_config(path) or {}
+    block = yio.emit_config({persona_id: _for_config_file(definition)})
     indented = "".join("  " + line if line.strip() else line
                        for line in block.splitlines(keepends=True))
 
@@ -1920,6 +2227,27 @@ def _check_name(persona, personas, defining, creating, updating, store_has=False
 
 
 def main(argv=None):
+    """Console entry point: run the CLI, and report a bad config as an error, not a crash.
+
+    ⚠️ A yapyon parse failure is a typo in the user's own file, and it arrives as a
+    :class:`yapyon.AkanError` carrying the file, line and column. Left to propagate it
+    prints a traceback whose last line is the only part that matters -- which reads as
+    a crash in our tool rather than a problem with their document. Every other error
+    this CLI raises goes out through :func:`sys.exit` with a sentence; a parse error
+    now does the same.
+
+    The ``file:line:col`` form is deliberate: it is what editors and compilers already
+    understand, and yapyon puts it there for us.
+    """
+    try:
+        return _cli(argv)
+    except yapyon.AkanError as exc:
+        if exc.source:
+            sys.exit(f"Error: {exc.source}:{exc.line}:{exc.col}: {exc.msg}")
+        sys.exit(f"Error: line {exc.line}, col {exc.col}: {exc.msg}")
+
+
+def _cli(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     if any(a in ("-h", "--help") for a in args):
         print(USAGE)

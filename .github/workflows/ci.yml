@@ -12,9 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Ends of the supported range plus the version that gained tomllib,
-        # which the config round-trip tests skip below 3.11.
-        python-version: ["3.9", "3.11", "3.13"]
+        # Ends of the supported range. The floor is yapyon's, and matches
+        # Debian 12 (bookworm), the oldest Debian release still supported.
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,8 +37,11 @@ jobs:
       # cleanly and then fails at runtime.
       - name: Verify presets ship in the wheel
         run: |
-          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/harness.claude.yaml'
-          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/persona.kimi.yaml'
+          python -m zipfile -l dist/*.whl > wheel.txt
+          for f in agents.tmpl functions.contract persona/kimi.persona.tmpl \
+                   harness/claude.harness.tmpl dialect/chat.dialect.tmpl secret/pass.secret.tmpl; do
+            grep -q "persona_grata/data/$f" wheel.txt || { echo "missing from wheel: $f"; exit 1; }
+          done
       - name: Verify the installed console scripts run
         run: |
           pip install dist/*.whl
@@ -47,7 +50,7 @@ jobs:
 
   # A reminder, not a catch: no branch protection requires this job, so an
   # agent with write access could gut it. Declared as what it is until that
-  # changes. Runs 3.13 only -- kinemata needs >=3.11 and the floor stays 3.9.
+  # changes. Runs 3.13 only.
   kinemata:
     runs-on: ubuntu-latest
     steps:

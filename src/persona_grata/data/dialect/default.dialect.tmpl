@@ -3,7 +3,7 @@
 #
 # A *dialect* is the wire protocol spoken over an endpoint. It is declared on BOTH sides -- a
 # harness lists which it can speak (best first, in `supported_dialects`), a persona's endpoint says
-# where it serves each -- and __MATCH_FIRST__ negotiates between them. No match means the agent
+# where it serves each -- and match_first() negotiates between them. No match means the agent
 # cannot be built, and is refused by name rather than failing as a template.
 #
 # These files are the REGISTRY: they seed every persona's `mind.dialects`, which the persona then
@@ -19,13 +19,13 @@
 # harness.<id>.yaml. To describe a proxy or a variant of your own, declare it in your agents.yaml
 # under the persona's mind.dialects -- the registry seeds every key you leave out.
 
-api_uri: "{{endpoint}}"                          # Where this protocol is mounted
-msg_uri: "{{api_uri}}/v1/chat/completions"       # Completion/message op. (default OpenAI std)
-model_uri: "{{api_uri}}/v1/models"               # Model listing op. (default OpenAI std)
-emb_uri: "{{api_uri}}/v1/embeddings"             # Embeddings op. (default OpenAI std)
+api_uri: y"{endpoint}"                        # Where this protocol is mounted
+msg_uri: y"{api_uri}/v1/chat/completions"        # Completion/message op. (default OpenAI std)
+model_uri: y"{api_uri}/v1/models"                # Model listing op. (default OpenAI std)
+emb_uri: y"{api_uri}/v1/embeddings"              # Embeddings op. (default OpenAI std)
 
 verify:                                          # Auth verification settings for this protocol
-  check_uri: "{{msg_uri}}"                       # URL for auth verification (default: msg_uri)
+  check_uri: y"{msg_uri}"                        # URL for auth verification (default: msg_uri)
   key_header: "Authorization: Bearer"            # Auth header variant (default OpenAI std)
   headers: []                                    # Headers the protocol requires. List: [<text>*]
   body: ""                                       # Probe body (default: minimal "ping" request)

@@ -58,8 +58,11 @@ jobs:
       # without them installs cleanly and then fails at runtime.
       - name: Verify presets ship in the wheel
         run: |
-          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/harness.claude.yaml'
-          python -m zipfile -l dist/*.whl | grep -q 'persona_grata/data/persona.kimi.yaml'
+          python -m zipfile -l dist/*.whl > wheel.txt
+          for f in agents.tmpl functions.contract persona/kimi.persona.tmpl \
+                   harness/claude.harness.tmpl dialect/chat.dialect.tmpl secret/pass.secret.tmpl; do
+            grep -q "persona_grata/data/$f" wheel.txt || { echo "missing from wheel: $f"; exit 1; }
+          done
       - name: Verify the installed console scripts run
         run: |
           pip install dist/*.whl

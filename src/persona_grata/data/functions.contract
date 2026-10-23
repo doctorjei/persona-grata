@@ -1,0 +1,14 @@
+# Functions persona-grata's templates may call (yapyon SPEC §13.2).
+#
+# A yapyon record: read by yapyon.load_contract and handed to the loader, never named by a
+# document. Each top-level key is a function a template calls by that name.
+
+match_first:                                  # Dialect negotiation: harness wants x persona has
+  params:
+    keys: "list[str]"                         # Acceptable, best first (supported_dialects)
+    items: "dict[str, Any]"                   # Available (mind.dialects)
+  returns: "str"                              # The first of keys found among items' keys
+  impl:
+    python:
+      from: "persona_grata.dialects"
+      symbol: "match_first"

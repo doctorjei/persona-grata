@@ -3,6 +3,7 @@
 import json
 import stat
 import subprocess
+import textwrap
 
 import pytest
 
@@ -24,7 +25,10 @@ def home(tmp_path, monkeypatch):
 
 def config(tmp_path, text):
     path = tmp_path / "agents.yaml"
-    path.write_text(text)
+    # Dedented for the same reason as ``write`` in test_config_layering.py:
+    # yapyon will not parse an indented top-level mapping, and these literals
+    # are indented to read well inside the test.
+    path.write_text(textwrap.dedent(text))
     return pg.load_config(str(path))
 
 
@@ -86,7 +90,7 @@ def test_full_setup_writes_every_artifact(home, capsys):
     assert json.loads(settings.read_text())["model"] == "alpha-3-on"
 
     rc = (home / ".bashrc").read_text()
-    assert "orion-claude() {" in rc
+    assert "orion_claude() {" in rc
     assert f'CLAUDE_CONFIG_DIR="{store / "claude"}"' in rc
     assert f'ANTHROPIC_AUTH_TOKEN="$(cat {token})"' in rc
 
@@ -133,7 +137,7 @@ def test_harness_without_config_file_is_skipped(home):
     cfg = config(home, WITH_BARE_HARNESS)
     pg.setup_harness("orion", "bare", cfg)          # must not raise IsADirectoryError
     assert (home / ".config" / "personas" / "orion" / "bare").is_dir()
-    assert "orion-bare() {" in (home / ".bashrc").read_text()
+    assert "orion_bare() {" in (home / ".bashrc").read_text()
 
 
 def test_rerun_replaces_the_block_and_keeps_the_rest(home):
@@ -143,7 +147,7 @@ def test_rerun_replaces_the_block_and_keeps_the_rest(home):
     pg.setup_harness("orion", "claude", cfg)
 
     rc = (home / ".bashrc").read_text()
-    assert rc.count("orion-claude() {") == 1
+    assert rc.count("orion_claude() {") == 1
     assert "export EXISTING=1" in rc
 
 
@@ -155,8 +159,26 @@ def test_legacy_description_keyed_block_is_replaced(home):
     pg.setup_harness("orion", "claude", config(home, BASIC))
 
     rc = (home / ".bashrc").read_text()
-    assert rc.count("orion-claude() {") == 1
+    assert rc.count("orion_claude() {") == 1
     assert "Orion Toolkit & Claude Code >>>" not in rc
+
+
+def test_a_dashed_command_from_before_0_0_4_is_replaced(home):
+    # Until 2026-10-22 the default command was `orion-claude`. The marker never
+    # changed, so a re-setup finds the old block and swaps in `orion_claude`,
+    # and removal finds it too -- no alias, no migration step.
+    old = ("# >>> persona-grata: orion-claude >>>\n"
+           "orion-claude() {\n  command claude \"$@\"\n}\n"
+           "# <<< persona-grata: orion-claude <<<\n")
+    (home / ".bashrc").write_text("export EXISTING=1\n" + old)
+    pg.setup_harness("orion", "claude", config(home, BASIC))
+    rc = (home / ".bashrc").read_text()
+    assert "orion-claude() {" not in rc and rc.count("orion_claude() {") == 1
+    assert "export EXISTING=1" in rc
+
+    (home / ".bashrc").write_text("export EXISTING=1\n" + old)
+    pg.remove_harness("orion", "claude", config(home, BASIC))
+    assert (home / ".bashrc").read_text() == "export EXISTING=1\n"
 
 
 def test_zsh_users_get_zshrc(home, monkeypatch):
@@ -291,8 +313,8 @@ def test_wrapper_env_is_exported(home):
         auth_var: "BARE_KEY"
         wrapper_env:
           BARE_PROVIDER: "openai"
-          BARE_MODEL: "{{mind.model}}"
-          BARE_HOST: "{{mind.dialects[protocol].api_uri}}"
+          BARE_MODEL: y"{mind.model}"
+          BARE_HOST: y"{mind.dialects[protocol].api_uri}"
 """))
     rc = (home / ".bashrc").read_text()
     assert 'BARE_PROVIDER="openai"' in rc
@@ -376,8 +398,8 @@ def test_remove_harness_takes_only_its_own(home):
     assert (store / "claude" / "settings.json").exists()   # sibling untouched
     assert (store / "token").exists()                      # token is kept
     rc = (home / ".bashrc").read_text()
-    assert "orion-codex() {" not in rc
-    assert "orion-claude() {" in rc
+    assert "orion_codex() {" not in rc
+    assert "orion_claude() {" in rc
     assert "export KEEPME=1" in rc
 
 
@@ -520,10 +542,10 @@ personas:
     store = home / ".config" / "personas" / "legacy_box"
     assert (store / "codex").is_dir() and (store / "goose").is_dir()
     assert not (store / "claude").exists()
-    assert "skipping legacy_box-claude" in capsys.readouterr().err
+    assert "skipping legacy_box_claude" in capsys.readouterr().err
 
     rc = (home / ".bashrc").read_text()
-    assert "legacy_box-codex() {" in rc and "legacy_box-claude() {" not in rc
+    assert "legacy_box_codex() {" in rc and "legacy_box_claude() {" not in rc
 
     # Naming it explicitly is a different question, and gets a different answer.
     with pytest.raises(SystemExit) as exit_info:
@@ -543,7 +565,7 @@ def test_a_designation_names_one_agent(home):
     assert not (store / "codex").exists()        # only the one it named
     # The wrapper is still the shell-safe rendering: a function name cannot
     # contain '+'.
-    assert "orion-claude() {" in (home / ".bashrc").read_text()
+    assert "orion_claude() {" in (home / ".bashrc").read_text()
 
 
 def test_a_designation_removes_the_agent_it_names(home):
@@ -554,7 +576,7 @@ def test_a_designation_removes_the_agent_it_names(home):
 
     assert not (home / ".config" / "personas" / "orion" / "codex").exists()
     rc = (home / ".bashrc").read_text()
-    assert "orion-codex() {" not in rc and "orion-claude() {" in rc
+    assert "orion_codex() {" not in rc and "orion_claude() {" in rc
 
 
 def test_a_designation_already_names_its_harness(home):
@@ -590,10 +612,10 @@ def test_a_name_replaces_the_command_but_not_the_marker(home):
     rc = (home / ".bashrc").read_text()
     # The function bears the NAME...
     assert "scout() {" in rc
-    assert "orion-claude() {" not in rc
+    assert "orion_claude() {" not in rc
     # ...and the marker the DESIGNATION, which is what makes renaming safe.
     assert "# >>> persona-grata: orion-claude >>>" in rc
-    assert "scout: orion+claude" in names_file(home).read_text()
+    assert 'scout: "orion+claude"' in names_file(home).read_text()
     subprocess.run(["bash", "-n", str(home / ".bashrc")], check=True)
 
 
@@ -631,7 +653,7 @@ def test_setting_up_by_name_keeps_the_name(home):
     pg.main(["--name", "scout", str(path), "orion+claude"])
     pg.main([str(path), "scout"])
 
-    assert "scout: orion+claude" in names_file(home).read_text()
+    assert 'scout: "orion+claude"' in names_file(home).read_text()
     assert "scout() {" in (home / ".bashrc").read_text()
 
 
@@ -671,6 +693,15 @@ def test_a_name_is_held_to_the_shared_grammar(home):
     assert "agent name" in str(exit_info.value)
 
 
+def test_a_name_cannot_begin_with_a_digit(home):
+    # It would become a shell function no shell accepts.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(["--name", "1scout", str(path), "orion+claude"])
+    assert "must begin with a letter" in str(exit_info.value)
+
+
 def test_name_contradicts_the_modes_that_set_nothing_up(home):
     path = home / "agents.yaml"
     path.write_text(BASIC)
@@ -679,6 +710,27 @@ def test_name_contradicts_the_modes_that_set_nothing_up(home):
         with pytest.raises(SystemExit) as exit_info:
             pg.main(argv)
         assert "--name names an agent being set up" in str(exit_info.value)
+
+
+def test_the_name_registry_is_yapyon(home):
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    pg.main(["--name", "scout", str(path), "orion+claude"])
+    assert 'scout: "orion+claude"' in names_file(home).read_text()
+    assert pg.agent_names(pg.load_config(str(path), targets={})) == {"scout": ("orion", "claude")}
+
+
+def test_a_name_registry_from_before_0_0_4_is_read_and_rewritten(home):
+    # The old writer left the value unquoted, which yapyon refuses. Ours was the
+    # only writer, so the file is recognised and converted, not lost.
+    path = home / "agents.yaml"
+    path.write_text(BASIC)
+    names = names_file(home)
+    names.parent.mkdir(parents=True, exist_ok=True)
+    names.write_text("# Chosen agent names, written by persona-grata.\n\nscout: orion+claude\n")
+    config = pg.load_config(str(path), targets={})
+    assert pg.agent_names(config) == {"scout": ("orion", "claude")}
+    assert 'scout: "orion+claude"' in names.read_text()
 
 
 def test_an_unreadable_name_registry_is_not_fatal(home, capsys):
@@ -691,7 +743,7 @@ def test_an_unreadable_name_registry_is_not_fatal(home, capsys):
     names.write_text("this: [is not: valid yaml\n")
 
     pg.main([str(path), "orion+claude"])
-    assert "orion-claude() {" in (home / ".bashrc").read_text()
+    assert "orion_claude() {" in (home / ".bashrc").read_text()
     assert "cannot read" in capsys.readouterr().err
 
 
@@ -719,13 +771,21 @@ def test_unknown_option_is_rejected(home):
 LOCAL_FLAGS = ["--endpoint", "http://localhost:11434/v1", "--model", "llama3", "--no-token"]
 
 
+def test_a_flag_defined_persona_cannot_begin_with_a_digit(home):
+    # The file path has refused `1a` since yapyon 0.3.0; the command line did not.
+    with pytest.raises(SystemExit) as exit_info:
+        pg.main(LOCAL_FLAGS + ["1a", "claude"])
+    assert "invalid persona name '1a': names must begin with a letter" in str(exit_info.value)
+    assert not (home / ".bashrc").exists()
+
+
 def test_flags_define_a_persona_with_no_config_file(home):
-    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
+    pg.main(LOCAL_FLAGS + ["localbox", "claude"])
     settings = json.loads(
-        (home / ".config/personas/ollama/claude/settings.json").read_text())
+        (home / ".config/personas/localbox/claude/settings.json").read_text())
     assert settings["model"] == "llama3"
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
-    assert "ollama-claude" in (home / ".bashrc").read_text()
+    assert "localbox_claude" in (home / ".bashrc").read_text()
 
 
 def test_no_token_skips_the_key_prompt_and_its_verification(home, monkeypatch):
@@ -735,8 +795,8 @@ def test_no_token_skips_the_key_prompt_and_its_verification(home, monkeypatch):
     monkeypatch.setattr(pg, "_prompt_key", fail)
     monkeypatch.setattr(pg, "_verify_key", fail)
 
-    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
-    assert not (home / ".config/personas/ollama/token").exists()
+    pg.main(LOCAL_FLAGS + ["localbox", "claude"])
+    assert not (home / ".config/personas/localbox/token").exists()
 
 
 def test_agent_desc_defaults_to_the_wrapper_command_name(home):
@@ -744,7 +804,7 @@ def test_agent_desc_defaults_to_the_wrapper_command_name(home):
     # same string; anything else means the setup notes tell you the wrong thing.
     cfg = config(home, BASIC)
     for hid in ("claude", "codex", "goose"):
-        assert cfg["personas"]["orion"]["harnesses"][hid]["agent_desc"] == f"orion-{hid}"
+        assert cfg["personas"]["orion"]["harnesses"][hid]["agent_desc"] == f"orion_{hid}"
 
 
 def test_agent_desc_is_overridable_per_harness(home):
@@ -755,26 +815,26 @@ def test_agent_desc_is_overridable_per_harness(home):
 """)
     harnesses = cfg["personas"]["orion"]["harnesses"]
     assert harnesses["claude"]["agent_desc"] == "Orion (chat)"
-    assert harnesses["codex"]["agent_desc"] == "orion-codex"      # others unaffected
+    assert harnesses["codex"]["agent_desc"] == "orion_codex"      # others unaffected
 
 
 def test_setup_announces_the_agent_by_its_command_name(home, capsys):
     pg.setup_harness("orion", "claude", config(home, BASIC))
     out = capsys.readouterr().out
-    assert "orion-claude Setup Script" in out
-    assert "To run orion-claude" in out
+    assert "orion_claude Setup Script" in out
+    assert "To run orion_claude" in out
 
 
 def test_a_store_only_persona_is_removable_by_name(home):
     # Defined by flags, so it exists in the store but in no config file. Removal
     # needs only paths, which derive from the id -- so it must not need the flags
     # repeated just to undo itself.
-    pg.main(LOCAL_FLAGS + ["ollama", "claude"])
-    assert (home / ".config/personas/ollama/claude").is_dir()
+    pg.main(LOCAL_FLAGS + ["localbox", "claude"])
+    assert (home / ".config/personas/localbox/claude").is_dir()
 
-    pg.main(["--remove", "ollama", "claude"])
-    assert not (home / ".config/personas/ollama/claude").exists()
-    assert "ollama-claude" not in (home / ".bashrc").read_text()
+    pg.main(["--remove", "localbox", "claude"])
+    assert not (home / ".config/personas/localbox/claude").exists()
+    assert "localbox_claude" not in (home / ".bashrc").read_text()
 
 
 def test_removing_a_persona_that_was_never_set_up_still_fails(home):
@@ -787,11 +847,11 @@ def test_removing_a_persona_that_was_never_set_up_still_fails(home):
 def test_a_definition_is_ephemeral_unless_exported(home):
     path = home / "agents.yaml"
     path.write_text(BASIC)
-    pg.main([str(path)] + LOCAL_FLAGS + ["ollama", "claude"])
+    pg.main([str(path)] + LOCAL_FLAGS + ["localbox", "claude"])
 
-    assert "ollama" not in path.read_text()          # nothing written down
+    assert "localbox" not in path.read_text()          # nothing written down
     with pytest.raises(SystemExit):                  # ...so it is gone next run
-        pg.main([str(path), "ollama", "claude"])
+        pg.main([str(path), "localbox", "claude"])
 
 
 def test_flags_override_an_existing_persona_without_clobbering_it(home):
@@ -850,7 +910,9 @@ def test_export_carries_the_presets_placement_and_harness_settings(home):
     exported = yaml.safe_load(out.read_text())["personas"]["kimi"]
     # kimi mounts Anthropic somewhere other than its endpoint root; a template
     # that dropped that would not reproduce the agent it claims to describe.
-    assert exported["mind"]["dialects"]["anthropic"]["api_uri"] == "{{endpoint}}/anthropic"
+    # A user's agents.yaml is a yapyon document, so the export carries the
+    # y-string in the spelling its reader parses -- not the old {{...}} form.
+    assert exported["mind"]["dialects"]["anthropic"]["api_uri"] == 'y"{endpoint}/anthropic"'
 
     # A preset's genuine per-harness settings still export from `harnesses`.
     other = home / "minimax.yaml"
@@ -888,8 +950,8 @@ def test_update_allows_replacing_an_existing_persona(home):
 
 
 def test_update_is_not_needed_for_a_new_name(home):
-    pg.main(LOCAL_FLAGS + ["ollama", "claude"])       # no --update
-    assert (home / ".config/personas/ollama/claude/settings.json").exists()
+    pg.main(LOCAL_FLAGS + ["localbox", "claude"])       # no --update
+    assert (home / ".config/personas/localbox/claude/settings.json").exists()
 
 
 def test_update_requires_the_persona_to_exist(home):
@@ -951,8 +1013,8 @@ def test_modes_are_mutually_exclusive(home, pair):
 def test_create_is_the_default_spelled_out(home):
     # --create only makes the default explicit, so that a script meaning
     # "create" cannot silently update instead.
-    pg.main(["--create"] + LOCAL_FLAGS + ["ollama", "claude"])
-    assert (home / ".config/personas/ollama/claude/settings.json").exists()
+    pg.main(["--create"] + LOCAL_FLAGS + ["localbox", "claude"])
+    assert (home / ".config/personas/localbox/claude/settings.json").exists()
 
 
 def test_create_refuses_a_taken_name_even_with_no_replacements(home):
@@ -974,7 +1036,7 @@ personas:
 def test_export_records_the_persona_and_preserves_the_file(home):
     path = home / "agents.yaml"
     path.write_text(COMMENTED)
-    pg.main(LOCAL_FLAGS + ["--export", str(path), "ollama", "claude"])
+    pg.main(LOCAL_FLAGS + ["--export", str(path), "localbox", "claude"])
     text = path.read_text()
 
     # Comments survive: the file is edited as text, not re-serialized.
@@ -984,17 +1046,17 @@ def test_export_records_the_persona_and_preserves_the_file(home):
 
     # The block lands *inside* personas, not appended past the end of the file.
     reloaded = pg.load_config(str(path))["personas"]
-    assert reloaded["ollama"]["mind"]["model"] == "llama3"
+    assert reloaded["localbox"]["mind"]["model"] == "llama3"
     assert reloaded["orion"]["mind"]["endpoint"] == "https://api.cybertron.space"
 
 
 def test_export_writes_the_schema_placeholder_for_unset(home):
     path = home / "agents.yaml"
     path.write_text(COMMENTED)
-    pg.main(LOCAL_FLAGS + ["--export", str(path), "ollama", "claude"])
+    pg.main(LOCAL_FLAGS + ["--export", str(path), "localbox", "claude"])
 
     assert "token: None" in path.read_text()         # not YAML's `null`
-    assert pg.load_config(str(path))["personas"]["ollama"]["token"] is None
+    assert pg.load_config(str(path))["personas"]["localbox"]["token"] is None
 
 
 def test_export_leaves_an_already_defined_persona_alone(home, capsys):
@@ -1151,7 +1213,7 @@ class Interview:
 
 
 HARNESS_QUESTION = "Harnesses (claude codex goose)"
-LOCAL_ANSWERS = ["ollama", "Local Llama", "http://localhost:11434/v1", "llama3"]
+LOCAL_ANSWERS = ["localbox", "Local Llama", "http://localhost:11434/v1", "llama3"]
 
 
 def test_interactive_defines_a_persona_from_answers(home, monkeypatch):
@@ -1161,24 +1223,24 @@ def test_interactive_defines_a_persona_from_answers(home, monkeypatch):
     pg.main(["-i"])
 
     settings = json.loads(
-        (home / ".config/personas/ollama/claude/settings.json").read_text())
+        (home / ".config/personas/localbox/claude/settings.json").read_text())
     assert settings["model"] == "llama3"
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
-    assert "ollama-claude" in (home / ".bashrc").read_text()
-    assert not (home / ".config/personas/ollama/token").exists()   # no key wanted
+    assert "localbox_claude" in (home / ".bashrc").read_text()
+    assert not (home / ".config/personas/localbox/token").exists()   # no key wanted
 
 
 def test_interactive_does_not_re_ask_what_the_flags_gave(home, monkeypatch):
     # The interview and the flags are two front ends to one definition, so a
     # value supplied either way is settled and must not be asked about again.
-    interview = Interview(["ollama", "claude"], {"config file": False}).install(monkeypatch)
+    interview = Interview(["localbox", "claude"], {"config file": False}).install(monkeypatch)
     pg.main(["-i", "--endpoint", "http://localhost:11434/v1", "--model", "llama3",
              "--desc", "Local Llama", "--no-token"])
 
     assert interview.asked == ["Persona name", HARNESS_QUESTION]
     assert not [q for q in interview.confirmed if "API key" in q]
     settings = json.loads(
-        (home / ".config/personas/ollama/claude/settings.json").read_text())
+        (home / ".config/personas/localbox/claude/settings.json").read_text())
     assert settings["model"] == "llama3"
 
 
@@ -1227,12 +1289,12 @@ def test_interactive_offers_to_save_the_definition(home, monkeypatch):
               {"API key": False, "config file": True}).install(monkeypatch)
     pg.main(["-i"])
 
-    saved = pg.load_config(str(out))["personas"]["ollama"]
+    saved = pg.load_config(str(out))["personas"]["localbox"]
     assert saved["mind"]["endpoint"] == "http://localhost:11434/v1"
     assert saved["mind"]["model"] == "llama3"
     assert saved["persona_desc"] == "Local Llama"
     assert saved["token"] is None
-    assert (home / ".config/personas/ollama/claude").is_dir()      # set up as well
+    assert (home / ".config/personas/localbox/claude").is_dir()      # set up as well
 
 
 def test_interactive_export_writes_the_config_and_sets_nothing_up(home, monkeypatch):
@@ -1240,7 +1302,7 @@ def test_interactive_export_writes_the_config_and_sets_nothing_up(home, monkeypa
     interview = Interview(LOCAL_ANSWERS, {"API key": False}).install(monkeypatch)
     pg.main(["-i", "--export", str(out)])
 
-    assert pg.load_config(str(out))["personas"]["ollama"]["mind"]["model"] == "llama3"
+    assert pg.load_config(str(out))["personas"]["localbox"]["mind"]["model"] == "llama3"
     assert HARNESS_QUESTION not in interview.asked      # nothing is being set up
     assert not [q for q in interview.confirmed if "config file" in q]   # nor re-offered
     assert not (home / ".config" / "personas").exists()
@@ -1264,20 +1326,20 @@ def test_interactive_re_asks_an_unusable_persona_name(home, monkeypatch):
     pg.main(["-i"])
 
     assert interview.asked.count("Persona name") == 3
-    assert (home / ".config/personas/ollama/claude").is_dir()
+    assert (home / ".config/personas/localbox/claude").is_dir()
 
 
 def test_interactive_re_asks_an_endpoint_with_no_scheme(home, monkeypatch):
     # Verification and every harness issue HTTP against this, so a bare host is
     # caught here rather than at first use.
-    interview = Interview(["ollama", "Local Llama", "localhost:11434/v1",
+    interview = Interview(["localbox", "Local Llama", "localhost:11434/v1",
                            "http://localhost:11434/v1", "llama3", "claude"],
                           {"API key": False}).install(monkeypatch)
     pg.main(["-i"])
 
     assert interview.asked.count("API endpoint") == 2
     settings = json.loads(
-        (home / ".config/personas/ollama/claude/settings.json").read_text())
+        (home / ".config/personas/localbox/claude/settings.json").read_text())
     assert settings["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
 
 
@@ -1287,8 +1349,8 @@ def test_interactive_re_asks_an_unknown_harness(home, monkeypatch):
     pg.main(["-i"])
 
     assert interview.asked.count(HARNESS_QUESTION) == 2
-    assert (home / ".config/personas/ollama/goose").is_dir()
-    assert not (home / ".config/personas/ollama/claude").exists()
+    assert (home / ".config/personas/localbox/goose").is_dir()
+    assert not (home / ".config/personas/localbox/claude").exists()
 
 
 def test_interactive_does_not_ask_about_a_key_it_was_handed(home, monkeypatch):
@@ -1298,7 +1360,7 @@ def test_interactive_does_not_ask_about_a_key_it_was_handed(home, monkeypatch):
     pg.main(["-i", "--token", key_file(home)])
 
     assert not [q for q in interview.confirmed if "API key" in q]
-    assert (home / ".config/personas/ollama/token").read_text() == "sk-from-a-file"
+    assert (home / ".config/personas/localbox/token").read_text() == "sk-from-a-file"
 
 
 def test_interactive_is_not_a_removal_front_end(home):
@@ -1314,9 +1376,9 @@ def test_ask_takes_the_default_on_blank(monkeypatch):
 
 
 def test_ask_re_asks_when_there_is_no_default(monkeypatch):
-    replies = iter(["", "   ", "ollama"])
+    replies = iter(["", "   ", "localbox"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(replies))
-    assert pg._ask("Persona name") == "ollama"
+    assert pg._ask("Persona name") == "localbox"
 
 
 def test_ask_ends_the_interview_on_eof(monkeypatch):

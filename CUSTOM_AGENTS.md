@@ -10,9 +10,9 @@ workplace purposes.
 
 ## Agent Configuration
 
-Agents are configured via a YAML file with the following minimum elements:
+Agents are configured via a Yapyon (.yap) file with the following minimum elements:
 
-```
+```yapyon
 personas:
   <persona>:
     mind:
@@ -21,7 +21,7 @@ personas:
 
 For example, a typical agent configuration might look like this:
 
-```
+```yapyon
 personas:
   orion:
     persona_desc: "Orion Toolkit"
@@ -32,7 +32,7 @@ personas:
 
 This example includes harness URL and other customizations:
 
-```
+```yapyon
 personas:
   pax:
     persona_desc: "Pax Toolkit"
@@ -40,13 +40,13 @@ personas:
       endpoint: "https://api.moonbase.space"
       dialects:
         anthropic:
-          api_uri: "{{endpoint}}/anthropic_api"
+          api_uri: y"{endpoint}/anthropic_api"
           verify:
-            check_uri: "{{api_uri}}/verify_me"
+            check_uri: y"{api_uri}/verify_me"
             # Requires traditional Anthropic-style keys:
             key_header: "x-api-key:"
         responses:
-          api_uri: "{{endpoint}}/openai_api"
+          api_uri: y"{endpoint}/openai_api"
     harnesses:
       claude:
         harness_desc: "Sneaky Clod"
@@ -54,40 +54,43 @@ personas:
 
 ## Resolution of Names & Special Identifiers
 
-To avoid repetitive entry of the same values multiple times, the Persona-Grata parses a grammar
-that resolves existing, related entries via braces-based syntax in values. Identifiers within the
+To avoid repetitive entry of the same values multiple times, a value may be a yapyon **y-string**,
+`y"…"`, whose `{…}` references resolve to existing, related entries. Identifiers within the
 braces are resolved, where possible, to other values in the configuration tree on a nearest first,
 upward-only fashion; a key can see its "siblings", "parents", and "uncles"/"aunts" (?!), but not
 its "cousins". For example, a value in the harness may refer to `mind` key's child, `endpoint`,
 as follows:
 
-```
+```yapyon
 clod:
   wrapper_env:
-    CLOD_HOST: "{{mind.endpoint}}/misanthropic"         # Yields "https://api.clod.ai/misanthropic"
+    CLOD_HOST: y"{mind.endpoint}/misanthropic"          # Yields "https://api.clod.ai/misanthropic"
 ```
 
-Special identifiers use dunders (double-underscores) and can be used to indirectly reference keys
-and metadata. A key's string representation can be accessed via the `__KEY__` identifier:
+Special identifiers use dunders (double-underscores) and reference the tree around a value rather
+than a key by name. `__PARENT__` is the mapping a value sits in, and `__KEY__`, which may only follow
+`__PARENT__`, is that mapping's own key:
 
+```yapyon
+clod:
+  harness_desc: y"{__PARENT__.__KEY__}'s fancy harness" # Yields "clod's fancy harness"
 ```
+
+Each further `__PARENT__` climbs one level, so from inside `wrapper_env` the harness's key is two up:
+
+```yapyon
 clod:
   wrapper_env:
-    CLOD_HOST: "{{mind.endpoint}}/{{clod.__KEY__}}"     # Yields "https://api.clod.ai/clod"
+    CLOD_HOST: y"{mind.endpoint}/{__PARENT__.__PARENT__.__KEY__}"  # Yields "https://api.clod.ai/clod"
 ```
 
-To access the direct parent of an element, use the `__PARENT__` identifier:
-```
-clod:
-  harness_desc: "{{__PARENT__.__KEY__}}'s fancy harness" # Yields "clod's fancy harness"
-```
+Environment variables are references too, written `{$NAME}`; a plain string is never expanded, so
+a dollar sign needs no escaping. Write `{{` or `}}` for a literal brace inside a y-string:
 
-Environment variables are substituted before the file is parsed, in a single pass. Write `$$` for
-a literal dollar sign:
-
-```
+```yapyon
 orion:
-  persona_desc: "Costs $$5 per run"                      # Yields "Costs $5 per run"
+  persona_desc: "Costs $5 per run"                       # Yields "Costs $5 per run"
+  path: y"{$HOME}/agents/orion"                          # Yields "/home/you/agents/orion"
 ```
 
 ## Adding & Removing Harnesses
@@ -95,7 +98,7 @@ orion:
 Every known harness the persona can talk to is configured in addition to those you list; one that
 shares no dialect with it is skipped. To switch a harness off, set it to `None`:
 
-```
+```yapyon
 personas:
   orion:
     mind:
@@ -107,11 +110,13 @@ personas:
 A harness you name that isn't known is created from the harness defaults, so a custom harness needs
 only what differs. There are two ways to configure one.
 
-**By config file.** Put the harness's settings in `config_store` and render them into `content`
-with a serializer — `__AS_JSON__()`, `__AS_TOML__()`, or `__AS_YAML__()`. Nested maps become nested
-JSON objects, TOML tables, or YAML blocks, and empty/unset entries are dropped:
+**By config file.** Put the harness's settings in `config_store` & render them into `content` with
+a serializer — `__AS_JSON__()`, `__AS_TOML__()`, `__AS_YAML__()`, or `__AS_YAPYON__()`. Nested maps
+become nested JSON objects, TOML tables, or YAML / Yapyon blocks, and empty/unset entries are
+dropped, so a harness never sees a key the persona left empty. `__AS_YAPYON__()` is the one that
+carries multimaps and bytes, and as of `yapyon 0.3.0` it prunes like the other three:
 
-```
+```yapyon
 personas:
   orion:
     mind:
@@ -121,21 +126,21 @@ personas:
       apex:
         supported_dialects: ["chat"]                     # Wire protocols it speaks, best first
         path_var: "APEX_HOME"                            # Points the harness at its config dir
-        config_file: "{{path}}/config.toml"
+        config_file: y"{path}/config.toml"
         config_store:
-          model: "{{mind.model}}"
+          model: y"{mind.model}"
           providers:
-            "{{hid}}":                                   # Templated key -> [providers.apex]
-              base_url: "{{mind.dialects[protocol].api_uri}}"
-              env_key: "{{auth_var}}"
-        content: "{{config_store.__AS_TOML__()}}"
+            apex:
+              base_url: y"{mind.dialects[protocol].api_uri}"
+              env_key: y"{auth_var}"
+        content: y"{config_store.__AS_TOML__()}"
 ```
 
 **By environment.** Some harnesses cannot be pointed at a per-persona config directory. Use
 `wrapper_env` instead; those variables are exported by the generated shell wrapper, and no config
 file is written. This is how the bundled Goose harness works:
 
-```
+```yapyon
 personas:
   orion:
     mind:
@@ -147,13 +152,14 @@ personas:
         auth_var: "APEX_API_KEY"
         wrapper_env:
           APEX_PROVIDER: "openai"
-          APEX_MODEL: "{{mind.model}}"
-          APEX_HOST: "{{mind.dialects[protocol].api_uri}}"
+          APEX_MODEL: y"{mind.model}"
+          APEX_HOST: y"{mind.dialects[protocol].api_uri}"
 ```
 
 Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key
 is visible rather than silent. Persona, harness, and dialect _names_ are yours to choose, but they
-may contain only letters and digits (in any language), `-`, and `_`; `default` is reserved.
+are 1–64 ASCII letters, digits, and `_`, and may not start with a digit (kanibako's rule, so every
+name is also a valid shell function name); `default` is reserved.
 `config_store` is free-form harness data that is passed through untouched.
 
 ## Resources

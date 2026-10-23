@@ -23,12 +23,12 @@
 goose:
   harness_desc: "Goose"
   supported_dialects: ["chat"]
-  protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"
+  protocol: y"{match_first(supported_dialects, mind.dialects)}"
   auth_var: "OPENAI_API_KEY"
   path_var: "GOOSE_PATH_ROOT"
-  config_file: "{{path}}/config/config.yaml"
+  config_file: y"{path}/config/config.yaml"
   config_store:
-    GOOSE_PROVIDER: "openai"                     # Built-in provider used for OpenAI-compatible APIs
-    GOOSE_MODEL: "{{mind.model}}"
-    OPENAI_HOST: "{{mind.dialects[protocol].api_uri}}"  # Mount; OPENAI_BASE_PATH supplies /v1/...
-  content: "{{config_store.__AS_YAML__()}}"
+    GOOSE_PROVIDER: "openai"                   # Built-in provider used for OpenAI-compatible APIs
+    GOOSE_MODEL: y"{mind.model}"
+    OPENAI_HOST: y"{mind.dialects[protocol].api_uri}"     # OPENAI_BASE_PATH supplies /v1/...
+  content: y"{config_store.__AS_YAML__()}"

@@ -3,6 +3,7 @@
 import json
 import pathlib
 import shutil
+import textwrap
 
 import pytest
 import yaml
@@ -24,7 +25,13 @@ def fixed_store(monkeypatch):
 
 def write(tmp_path, text):
     path = tmp_path / "agents.yaml"
-    path.write_text(text)
+    # ⚠️ Dedented on the way in. yapyon refuses a top-level mapping that is
+    # indented at all ("expected a value, found an indented block"), where
+    # PyYAML tolerated a document whose lines all shared a base indent. The
+    # triple-quoted literals in this file are written indented for readability,
+    # so without this every one of them fails to parse for a reason that has
+    # nothing to do with what the test is checking.
+    path.write_text(textwrap.dedent(text))
     return str(path)
 
 
@@ -88,20 +95,20 @@ def store_cfg(tmp_path, monkeypatch, text):
 def test_a_store_with_no_settings_file_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PERSONA_STORE_DIR", str(tmp_path / "nothing-here"))
     cfg = pg.load_config(write(tmp_path, _MINIMAL))
-    assert cfg["secret_backend"] is None
+    assert cfg["secret_backend"] == {}          # the merge point, empty (ruled 2026-10-04)
 
 
 def test_store_settings_are_read(tmp_path, monkeypatch):
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     cfg = pg.load_config(write(tmp_path, _MINIMAL))
     assert cfg["secret_backend"] == "pass"
 
 
 def test_the_users_file_outranks_the_store(tmp_path, monkeypatch):
     # Most specific wins: what they wrote beats what the store carries.
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     cfg = pg.load_config(write(tmp_path, """
-        secret_backend: gopass
+        secret_backend: "gopass"
         personas:
           test_user:
             mind:
@@ -110,13 +117,22 @@ def test_the_users_file_outranks_the_store(tmp_path, monkeypatch):
     assert cfg["secret_backend"] == "gopass"
 
 
+def test_the_store_file_cannot_relocate_its_own_store(tmp_path, monkeypatch):
+    # The file is found BY the store's location, so it cannot set it. Obeyed, it
+    # read settings from one store and built personas in another (measured
+    # 2026-10-23); kanibako, which reads the standard path, would follow neither.
+    store_cfg(tmp_path, monkeypatch, 'persona_store: "/somewhere/else"\n')
+    with pytest.raises(SystemExit, match="persona_store.*PERSONA_STORE_DIR"):
+        pg.load_config(write(tmp_path, _MINIMAL), targets={})
+
+
 def test_store_settings_travel_with_a_relocated_store(tmp_path, monkeypatch):
     # The settings live IN the store, so pointing elsewhere must not keep
     # reading the old one -- that is the whole reason the file is in there.
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     other = tmp_path / "other"
     other.mkdir()
-    (other / "persona_store.cfg").write_text("secret_backend: prs\n")
+    (other / "persona_store.cfg").write_text('secret_backend: "prs"\n')
     monkeypatch.setenv("PERSONA_STORE_DIR", str(other))
     cfg = pg.load_config(write(tmp_path, _MINIMAL))
     assert cfg["secret_backend"] == "prs"
@@ -125,8 +141,148 @@ def test_store_settings_travel_with_a_relocated_store(tmp_path, monkeypatch):
 def test_an_unreadable_store_settings_file_warns_and_carries_on(tmp_path, monkeypatch, capsys):
     store_cfg(tmp_path, monkeypatch, "secret_backend: [unclosed\n")
     cfg = pg.load_config(write(tmp_path, _MINIMAL))
-    assert cfg["secret_backend"] is None
+    assert cfg["secret_backend"] == {}          # the merge point, empty (ruled 2026-10-04)
     assert "persona_store.cfg" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Writing the store's settings: as text, so the file stays the user's
+# --------------------------------------------------------------------------- #
+_HAND_WRITTEN = """\
+# My store. These comments are the point.
+secret_backend: "pass"        # one manager for everything
+
+# Who may read what.
+env_add: ["MY_ENDPOINT"]
+"""
+
+
+def test_writing_a_setting_keeps_every_comment(tmp_path, monkeypatch):
+    store = store_cfg(tmp_path, monkeypatch, _HAND_WRITTEN)
+    pg.write_store_setting(store, "secret_backend", "gopass")
+    text = (store / "persona_store.cfg").read_text()
+    assert text == _HAND_WRITTEN.replace('"pass"  ', '"gopass"')   # only the value moved
+    assert pg.store_config(store)["secret_backend"] == "gopass"
+
+
+def test_a_new_setting_is_appended(tmp_path, monkeypatch):
+    store = store_cfg(tmp_path, monkeypatch, _HAND_WRITTEN.rstrip("\n"))   # no final newline
+    pg.write_store_setting(store, "env_allow", ["HOME", "PATH"])
+    text = (store / "persona_store.cfg").read_text()
+    assert text.startswith(_HAND_WRITTEN)
+    assert text.endswith('env_allow: ["HOME", "PATH"]\n')
+    assert pg.store_config(store)["env_allow"] == ["HOME", "PATH"]
+
+
+def test_a_block_value_is_replaced_whole(tmp_path, monkeypatch):
+    store = store_cfg(tmp_path, monkeypatch, 'env_add:   # extras\n  -\n    "A"\n\n  -\n    "B"\n'
+                                             'secret_backend: "pass"\n')
+    pg.write_store_setting(store, "env_add", ["C"])
+    assert (store / "persona_store.cfg").read_text() == \
+        'env_add: ["C"] # extras\nsecret_backend: "pass"\n'      # past its column: one space
+
+
+def test_a_missing_settings_file_is_created(tmp_path):
+    store = tmp_path / "store"
+    store.mkdir()
+    pg.write_store_setting(store, "secret_backend", "prs")
+    assert pg.store_config(store) == {"secret_backend": "prs"}
+    assert (store / "persona_store.cfg").read_text().startswith("#")
+
+
+def test_a_commented_out_setting_is_left_alone(tmp_path, monkeypatch):
+    store = store_cfg(tmp_path, monkeypatch, '# secret_backend: "pass"\n')
+    pg.write_store_setting(store, "secret_backend", "gopass")
+    assert (store / "persona_store.cfg").read_text() == \
+        '# secret_backend: "pass"\nsecret_backend: "gopass"\n'
+
+
+@pytest.mark.parametrize("key", ["personas", "persona_store", "secret_bakend"])
+def test_only_store_settings_can_be_written(tmp_path, monkeypatch, key):
+    store = store_cfg(tmp_path, monkeypatch, _HAND_WRITTEN)
+    with pytest.raises(ValueError, match="not a store setting"):
+        pg.write_store_setting(store, key, "x")
+    assert (store / "persona_store.cfg").read_text() == _HAND_WRITTEN
+
+
+def test_a_write_that_would_not_reload_leaves_the_file_as_it_was(tmp_path, monkeypatch):
+    # The existing file is already unreadable past the line we touch; the write
+    # must refuse rather than leave the store unreadable in a new way.
+    broken = 'secret_backend: "pass"\nenv_add: [unclosed\n'
+    store = store_cfg(tmp_path, monkeypatch, broken)
+    with pytest.raises(ValueError, match="not written"):
+        pg.write_store_setting(store, "secret_backend", "gopass")
+    assert (store / "persona_store.cfg").read_text() == broken
+    assert not (store / "persona_store.cfg.new").exists()
+
+
+def test_no_store_no_write(tmp_path):
+    with pytest.raises(ValueError, match="no persona store"):
+        pg.write_store_setting(tmp_path / "absent", "secret_backend", "pass")
+
+
+_STORE_TWEAKS_KIMI = """
+personas:
+  kimi:
+    mind:
+      model: "kimi-from-store"
+      dialects:
+        anthropic: {api_uri: "https://store.example/anthropic"}
+    harnesses:
+      claude: {config_file: "/store/claude.json"}
+"""
+
+
+def test_the_store_outranks_a_shipped_persona_preset(tmp_path, monkeypatch):
+    # The store sits between what we ship and the user's file -- at every level
+    # of the persona, not just the top. Before 2026-10-21 the preset won.
+    store_cfg(tmp_path, monkeypatch, _STORE_TWEAKS_KIMI)
+    kimi = pg.load_config(write(tmp_path, _MINIMAL), targets={"kimi": ["claude"]})["personas"]["kimi"]
+    assert kimi["mind"]["model"] == "kimi-from-store"
+    assert kimi["mind"]["dialects"]["anthropic"]["api_uri"] == "https://store.example/anthropic"
+    assert kimi["harnesses"]["claude"]["config_file"] == "/store/claude.json"
+    assert kimi["persona_desc"] == "Kimi"                   # the rest of the preset stands
+
+
+def test_the_users_file_outranks_the_stores_persona(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, _STORE_TWEAKS_KIMI)
+    kimi = pg.load_config(write(tmp_path, """
+        personas:
+          kimi:
+            mind: {model: "kimi-from-user"}
+    """), targets={})["personas"]["kimi"]
+    assert kimi["mind"]["model"] == "kimi-from-user"
+
+
+def test_a_harness_the_store_adds_can_be_named(tmp_path, monkeypatch):
+    # The CLI validates harness names against harness_names(), before anything is
+    # built; a harness only the store declares has to be on that list.
+    store_cfg(tmp_path, monkeypatch, """
+personas:
+  kimi:
+    harnesses:
+      store_h: {supported_dialects: ["chat"]}
+""")
+    path = write(tmp_path, """
+        personas:
+          kimi:
+            harnesses:
+              user_h: {supported_dialects: ["chat"]}
+    """)
+    names = pg.harness_names("kimi", path)
+    assert "store_h" in names and "user_h" in names and "claude" in names
+
+
+def test_a_store_only_persona_gets_every_default(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, """
+personas:
+  orion:
+    mind: {endpoint: "https://api.cybertron.space"}
+""")
+    orion = pg.load_config(write(tmp_path, _MINIMAL))["personas"]["orion"]
+    assert orion["persona_desc"] == "orion"
+    assert orion["path"].endswith("/orion")
+    assert set(orion["harnesses"]) == set(pg.preset_names("harness"))
 
 
 # --------------------------------------------------------------------------- #
@@ -164,7 +320,7 @@ def test_pid_and_hid_are_injected(tmp_path):
 def test_persona_preset_is_unwrapped_and_applied(tmp_path):
     # persona.kimi.yaml wraps its body in `kimi:`; the body must land on the
     # persona itself, not as a nested `kimi` key.
-    cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
+    cfg = pg.load_config(write(tmp_path, 'personas: ["kimi"]'))
     kimi = cfg["personas"]["kimi"]
     assert "kimi" not in kimi
     assert kimi["persona_desc"] == "Kimi"
@@ -175,7 +331,7 @@ def test_persona_preset_dialect_override_beats_the_registry(tmp_path):
     # The kimi preset mounts anthropic on /anthropic; the registry default
     # ({{endpoint}}) must not clobber it, and the protocols kimi says nothing
     # about keep the root mount.
-    cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
+    cfg = pg.load_config(write(tmp_path, 'personas: ["kimi"]'))
     dialects = cfg["personas"]["kimi"]["mind"]["dialects"]
     assert dialects["anthropic"]["api_uri"] == "https://api.moonshot.ai/anthropic"
     assert dialects["anthropic"]["msg_uri"] == "https://api.moonshot.ai/anthropic/v1/messages"
@@ -186,7 +342,7 @@ def test_persona_preset_dialect_override_beats_the_registry(tmp_path):
 def test_the_negotiated_mount_reaches_the_harness_config(tmp_path):
     # The whole point of placement: kimi states /anthropic once, and every
     # harness speaking that protocol picks it up without naming the harness.
-    cfg = pg.load_config(write(tmp_path, "personas: [kimi]"))
+    cfg = pg.load_config(write(tmp_path, 'personas: ["kimi"]'))
     harnesses = cfg["personas"]["kimi"]["harnesses"]
     assert harnesses["claude"]["protocol"] == "anthropic"
     settings = json.loads(harnesses["claude"]["content"])
@@ -248,10 +404,10 @@ def test_custom_persona_and_harness_get_defaults(tmp_path):
 
 
 def test_personas_shorthands(tmp_path):
-    as_list = pg.load_config(write(tmp_path, "personas: [kimi, minimax]"))
+    as_list = pg.load_config(write(tmp_path, 'personas: ["kimi", "minimax"]'))
     assert {"kimi", "minimax"} <= set(as_list["personas"])
 
-    as_str = pg.load_config(write(tmp_path, "personas: kimi"))
+    as_str = pg.load_config(write(tmp_path, 'personas: "kimi"'))
     assert "kimi" in as_str["personas"]
 
 
@@ -266,7 +422,7 @@ def test_every_persona_is_built_so_cross_references_resolve(tmp_path):
           borrower:
             mind:
               endpoint: "https://api.test.com"
-              model: "{{personas.kimi.mind.model}}"
+              model: y"{personas.kimi.mind.model}"
     """))
     assert cfg["personas"]["borrower"]["mind"]["model"] == cfg["personas"]["kimi"]["mind"]["model"]
 
@@ -279,7 +435,7 @@ def test_cross_references_still_resolve_when_targeting(tmp_path):
           borrower:
             mind:
               endpoint: "https://api.test.com"
-              model: "{{personas.kimi.mind.model}}"
+              model: y"{personas.kimi.mind.model}"
     """), targets={"borrower": ["claude"]})
     assert cfg["personas"]["borrower"]["mind"]["model"] == cfg["personas"]["kimi"]["mind"]["model"]
     assert list(cfg["personas"]["borrower"]["harnesses"]) == ["claude"]
@@ -313,6 +469,7 @@ def test_persona_values_resolve_with_no_harnesses(tmp_path):
 
 
 def test_an_unbuildable_harness_does_not_break_other_personas(tmp_path):
+    import yapyon
     # The reason targeting exists. One unresolvable reference aborts the whole
     # load, so before targets, a pairing that could never work took every other
     # command down with it.
@@ -323,12 +480,12 @@ def test_an_unbuildable_harness_does_not_break_other_personas(tmp_path):
               endpoint: "https://api.test.com"
             harnesses:
               claude:
-                config_file: "{{mind.no_such_key}}"
+                config_file: y"{mind.no_such_key}"
           fine:
             mind:
               endpoint: "https://api.test.com"
     """)
-    with pytest.raises(pg.te.TemplateError):               # still fatal if asked for
+    with pytest.raises(yapyon.AkanError, match="no_such_key"):   # still fatal if asked for
         pg.load_config(path, targets={"broken": ["claude"]})
 
     cfg = pg.load_config(path, targets={"fine": ["claude"]})    # ...but only then
@@ -401,7 +558,7 @@ personas:
 def test_a_named_incompatible_pairing_is_refused_by_name(tmp_path):
     # Compatibility is settled while both sides are literal strings, so a
     # pairing that cannot work reads like "unknown harness" rather than
-    # surfacing as a TemplateError about __MATCH_FIRST__.
+    # surfacing as an error from match_first() mid-resolution.
     path = write(tmp_path, CHAT_ONLY)
     with pytest.raises(SystemExit) as exit_info:
         pg.load_config(path, targets={"chat_only": ["claude"]})
@@ -424,7 +581,7 @@ def test_an_unnamed_incompatible_pairing_is_dropped_not_refused(tmp_path, capsys
     assert set(built) == {"codex", "goose"}
     assert built["codex"]["protocol"] == "chat"          # fell back from responses
     err = capsys.readouterr().err
-    assert "skipping chat_only-claude" in err and "speaks anthropic" in err
+    assert "skipping chat_only_claude" in err and "speaks anthropic" in err
 
 
 def test_a_persona_no_harness_can_speak_to_is_fatal(tmp_path):
@@ -535,7 +692,10 @@ def test_a_user_can_turn_a_harness_the_preset_switched_off_back_on(tmp_path, mon
     # block survived pruning with no defaults under it.
     data = tmp_path / "data"
     shutil.copytree(pg.DATA_DIR, data)                # the real schema, plus one
-    (data / "persona.edge.yaml").write_text("edge:\n  harnesses:\n    goose: None\n")
+    # Under data/<kind>/ like every other preset -- written at the root the loader
+    # never sees it, the persona gets no preset block, and goose is never switched
+    # off. The assert below then fails for the wrong reason.
+    (data / "persona" / "edge.persona.tmpl").write_text("edge:\n  harnesses:\n    goose: None\n")
     monkeypatch.setattr(pg, "DATA_DIR", data)
 
     off = tmp_path / "off.yaml"
@@ -560,50 +720,186 @@ def test_declared_personas(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# What a document may read from the environment (yapyon 0.4.0, ruled 2026-10-21)
+# --------------------------------------------------------------------------- #
+# RESERVED_ENV | env_allow | env_add. The three reserved names are always in;
+# env_allow (default: yapyon's STANDARD_ENV) and env_add (default: nothing) live
+# in persona_store.cfg only. A variable a document is not allowed to read is
+# *akan* -- the point is that a secret in the environment cannot be spliced into
+# a harness config by accident.
+_READS_MY_ENDPOINT = """
+personas:
+  orion:
+    mind: {endpoint: y"{$MY_ENDPOINT}", model: "m"}
+"""
+
+
+def test_a_document_cannot_read_a_variable_the_store_did_not_allow(tmp_path, monkeypatch):
+    import yapyon
+    monkeypatch.setenv("MY_ENDPOINT", "https://e.test")      # set -- and still refused
+    store_cfg(tmp_path, monkeypatch, "secret_backend: \"pass\"\n")
+    with pytest.raises(yapyon.AkanError, match="MY_ENDPOINT"):
+        pg.load_config(write(tmp_path, _READS_MY_ENDPOINT), targets={})
+
+
+@pytest.mark.parametrize("setting", ["env_add", "env_allow"])
+def test_the_store_opts_a_variable_in(tmp_path, monkeypatch, setting):
+    monkeypatch.setenv("MY_ENDPOINT", "https://e.test")
+    store_cfg(tmp_path, monkeypatch, f'{setting}: ["MY_ENDPOINT"]\n')
+    cfg = pg.load_config(write(tmp_path, _READS_MY_ENDPOINT), targets={})
+    assert cfg["personas"]["orion"]["mind"]["endpoint"] == "https://e.test"
+
+
+def test_an_allowed_but_unset_variable_is_still_loud(tmp_path, monkeypatch):
+    import yapyon
+    monkeypatch.delenv("MY_ENDPOINT", raising=False)
+    store_cfg(tmp_path, monkeypatch, 'env_add: ["MY_ENDPOINT"]\n')
+    with pytest.raises(yapyon.AkanError, match="MY_ENDPOINT"):
+        pg.load_config(write(tmp_path, _READS_MY_ENDPOINT), targets={})
+
+
+def test_an_empty_env_allow_cannot_remove_the_reserved_three(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, "env_allow: []\n")
+    monkeypatch.setenv("HOME", "/home/u")
+    cfg = pg.load_config(write(tmp_path, 'persona_store: y"{$HOME}/ps"\n'), targets={})
+    assert cfg["persona_store"] == "/home/u/ps"
+
+
+def test_env_settings_belong_to_the_store_not_the_agents_file(tmp_path, monkeypatch):
+    store_cfg(tmp_path, monkeypatch, "secret_backend: \"pass\"\n")
+    with pytest.raises(SystemExit, match="store setting"):
+        pg.load_config(write(tmp_path, 'env_add: ["X"]\n'), targets={})
+
+
+@pytest.mark.parametrize("text,why", [
+    ('env_add: "MY_ENDPOINT"\n', "must be a list"),
+    ('env_add: ["MY-ENDPOINT"]\n', "cannot be an environment variable name"),
+])
+def test_a_malformed_env_setting_is_refused(tmp_path, monkeypatch, text, why):
+    store_cfg(tmp_path, monkeypatch, text)
+    with pytest.raises(SystemExit, match=why):
+        pg.load_config(targets={})
+
+
+def test_a_typo_in_the_store_file_warns_and_names_the_file(tmp_path, monkeypatch, capsys):
+    # Before 2026-10-21 a stray key here was merged in silently -- and, worse,
+    # became "known", so the same typo in the user's own file stopped warning.
+    store_cfg(tmp_path, monkeypatch, 'env_ad: ["X"]\n')
+    pg.load_config(write(tmp_path, 'env_ad: ["X"]\n'), targets={})
+    err = capsys.readouterr().err
+    assert "unknown setting 'env_ad' in" in err and "persona_store.cfg" in err
+    assert "unknown setting 'env_ad' —" in err          # the user's file warns too
+
+
+def test_a_templated_dialect_list_is_left_for_match_first(tmp_path):
+    # Until 2026-10-23 the pre-check looked for the old `{{...}}` text, missed a
+    # y-string, and crashed with a TypeError joining it into a message.
+    cfg = pg.load_config(write(tmp_path, """
+        personas:
+          orion:
+            mind: {endpoint: "https://x.test"}
+            harnesses:
+              h1:
+                fav: "chat"
+                supported_dialects: [y"{fav}"]
+    """), targets={"orion": ["h1"]})
+    assert cfg["personas"]["orion"]["harnesses"]["h1"]["protocol"] == "chat"
+
+
+def test_match_first_takes_the_callers_order_and_is_loud_on_no_match():
+    from persona_grata.dialects import match_first
+    assert match_first(["responses", "chat"], {"chat": {}, "responses": {}}) == "responses"
+    with pytest.raises(ValueError, match="no dialect in common"):
+        match_first(["responses"], {"chat": {}})
+
+
+def test_the_contract_declares_match_first():
+    from persona_grata import yapyon_io
+    assert "match_first" in yapyon_io.contract().functions
+
+
+# --------------------------------------------------------------------------- #
 # The id grammar (shared with kanibako, which consumes this store)
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("pid", ["..", "kimi.k3", "a+b", "my persona", "a/b", "default", ""],
-                         ids=["dotdot", "dotted", "plus", "space", "slash", "reserved", "empty"])
-def test_an_unusable_persona_id_is_refused(tmp_path, pid):
-    path = write(tmp_path, "personas:\n  %r:\n    mind: {endpoint: 'https://x.test'}\n" % pid)
+@pytest.mark.parametrize("pid", ["..", "kimi.k3", "a+b", "my persona", "a/b", "default", "",
+                                "lama-3"],
+                         ids=["dotdot", "dotted", "plus", "space", "slash", "reserved", "empty",
+                             "dashed"])
+def test_an_unusable_persona_id_is_refused(pid):
+    # Through the command line -- a definition made of flags -- because that is
+    # the path only our check guards: in a file, yapyon refuses every one of these
+    # before we see it (a quoted key is reserved, and `..` cannot be a bare key).
+    # `..` is the case that matters: an id becomes a directory.
     with pytest.raises(SystemExit) as exit_info:
-        pg.load_config(path, targets={})
+        pg.load_config(overrides={"personas": {pid: {"mind": {"endpoint": "https://x.test"}}}},
+                       targets={})
     assert "persona name" in str(exit_info.value)
 
 
 def test_a_dotted_id_says_why_dots_are_refused(tmp_path):
-    # The mistake users actually make is `kimi.k3`, and "letters and digits" does
-    # not explain why a dot is not one of them. kanibako carries the same hint.
+    # The mistake users actually make is `kimi.k3`. In a file yapyon refuses it
+    # first, naming the character and the fix; on the command line ours does.
+    import yapyon
     path = write(tmp_path, "personas:\n  kimi.k3:\n    mind: {endpoint: 'https://x.test'}\n")
+    with pytest.raises(yapyon.AkanError, match="'.' cannot appear in a name.*'kimi_k3'"):
+        pg.load_config(path, targets={})
+    with pytest.raises(SystemExit, match="key-path separator"):
+        pg.load_config(overrides={"personas": {"kimi.k3": {"mind": {"endpoint": "https://x"}}}},
+                       targets={})
+
+
+def test_a_dashed_id_says_why_dashes_are_refused(tmp_path):
+    # `my-model` is the name a user reaches for naturally, so they need the reason.
+    import yapyon
+    path = write(tmp_path, "personas:\n  my-model:\n    mind: {endpoint: 'https://x.test'}\n")
+    with pytest.raises(yapyon.AkanError, match="'-' cannot appear in a name.*'my_model'"):
+        pg.load_config(path, targets={})
+    with pytest.raises(SystemExit, match="reads as minus"):
+        pg.load_config(overrides={"personas": {"my-model": {"mind": {"endpoint": "https://x"}}}},
+                       targets={})
+
+
+@pytest.mark.parametrize("name", ["lama-3", "my-model-2", "l\u00e4ma-3_x"])
+def test_dash_is_refused_for_every_kind_of_id(name):
+    # Ruled 2026-10-12: an id is a key, and a key has to stay usable as an
+    # identifier (dot-addressing in kanibako), so '-' is out. yapyon's lexer bars
+    # it the same way -- the format and the charset agree.
+    for kind in ("persona", "harness", "dialect"):
+        assert pg._id_error(kind, name) is not None, (kind, name)
+        assert "reads as minus" in pg._id_error(kind, name), (kind, name)
+
+
+def test_ids_are_ascii_like_kanibakos(tmp_path):
+    # kanibako 1.8.0 made every name ASCII (`identifiers.name_flaw`); adopted
+    # 2026-10-22. yapyon takes the key -- it is a Unicode identifier -- so the
+    # refusal is ours, and names the rule.
+    path = write(tmp_path, """
+        personas:
+          l\u00e4ma_3_x:
+            mind: {endpoint: "https://x.test"}
+    """)
     with pytest.raises(SystemExit) as exit_info:
         pg.load_config(path, targets={})
-    assert "key-path separator" in str(exit_info.value)
+    assert "only ASCII letters, digits and '_'" in str(exit_info.value)
 
 
-def test_ids_may_be_any_language(tmp_path):
-    # The rule is str.isalnum(), not ASCII -- harmonized with kanibako's.
-    cfg = pg.load_config(write(tmp_path, """
-        personas:
-          läma-3_x:
-            mind: {endpoint: "https://x.test"}
-    """), targets={})
-    assert cfg["personas"]["läma-3_x"]["path"].endswith("/personas/läma-3_x")
+def test_ids_are_at_most_64_characters():
+    assert pg._id_error("persona", "a" * 64) is None
+    assert "at most 64 characters" in pg._id_error("persona", "a" * 65)
 
 
 @pytest.mark.parametrize("block,word", [
-    ("harnesses:\n              bad.name: {supported_dialects: ['chat']}", "harness"),
-    ("mind:\n              endpoint: 'https://x.test'\n"
-     "              dialects:\n                bad.name: {api_uri: 'https://x.test'}", "dialect"),
+    ({"harnesses": {"bad.name": {"supported_dialects": ["chat"]}}}, "harness"),
+    ({"mind": {"endpoint": "https://x.test", "dialects": {"bad.name": {"api_uri": "https://x"}}}},
+     "dialect"),
 ])
-def test_harness_and_dialect_ids_share_the_rule(tmp_path, block, word):
-    path = write(tmp_path, """
-        personas:
-          orion:
-            mind: {endpoint: "https://x.test"}
-            %s
-    """ % block)
+def test_harness_and_dialect_ids_share_the_rule(block, word):
+    # One rule for every kind of id. In a file yapyon refuses `bad.name` as a key
+    # first; a definition from the command line reaches ours.
+    persona = {"mind": {"endpoint": "https://x.test"}}
+    persona.update(block)
     with pytest.raises(SystemExit) as exit_info:
-        pg.load_config(path, targets={})
+        pg.load_config(overrides={"personas": {"orion": persona}}, targets={})
     assert f"{word} name" in str(exit_info.value)
 
 
@@ -709,6 +1005,87 @@ def test_claude_content_is_valid_json_with_unset_models_pruned(tmp_path):
     assert "" not in settings["env"].values()
 
 
+# --------------------------------------------------------------------------- #
+# The prune wrap -- all four writers prune alike
+# --------------------------------------------------------------------------- #
+# yapyon 0.3.0 handed the resolved AST to every serializer and dropped the
+# READS_AST split, so our old dict-keyed ``prune`` stopped matching
+# anything and unset entries began appearing in rendered harness configs.  The
+# wrap now walks the AST (``yapyon_io.ast_prune``) and rebuilds a ``Builtin`` so
+# the resolver's ``takes`` check still passes.
+#
+# This SUPERSEDES the 2026-10-12 ruling that ``__AS_YAPYON__`` keep unset entries
+# while the other three dropped them -- see devnotes for that ruling and why it
+# was replaced.  All four are consistent now, which was the point of the ask.
+#
+# ⚠️ These assertions pin a *decision*.  If they go red because yapyon changed
+# the ``Builtin`` shape or its node classes, that is not a bug to fix here --
+# re-open the ruling.
+
+ONE_STORE_EVERY_SHAPE = """
+config_store:
+  a: "one"
+  b: ""
+  c: None
+  d: {}
+as_json: y"{config_store.__AS_JSON__()}"
+as_yaml: y"{config_store.__AS_YAML__()}"
+as_toml: y"{config_store.__AS_TOML__()}"
+as_yapyon: y"{config_store.__AS_YAPYON__()}"
+"""
+
+
+def _resolve_with_our_wrap(text):
+    import yapyon
+    from persona_grata.yapyon_io import _pruned_serializers
+    with _pruned_serializers():
+        return yapyon.loads(text)
+
+
+def test_every_writer_prunes_unset_entries_alike():
+    """All four writers drop "" / None / {} -- including ``__AS_YAPYON__``.
+
+    ⚠️ **This supersedes the 2026-10-12 ruling** that ``__AS_YAPYON__`` keep
+    unset entries while the other three dropped them.  yapyon 0.3.0 handed the
+    resolved AST to all four writers, which made the old dict-based ``prune`` a
+    silent no-op everywhere -- so the asymmetry was replaced by a worse failure
+    (unset keys appearing in rendered harness configs) and then fixed with an
+    AST-walking prune.  Jeremiah: "if Yapyon didn't fix the __AS_YAPYON__ issue
+    you mentioned, fix that too."  All four are consistent again.
+    """
+    tomllib = pytest.importorskip("tomllib")
+    import yapyon
+    out = _resolve_with_our_wrap(ONE_STORE_EVERY_SHAPE)
+    assert json.loads(out["as_json"]) == {"a": "one"}
+    assert yaml.safe_load(out["as_yaml"]) == {"a": "one"}
+    assert tomllib.loads(out["as_toml"]) == {"a": "one"}
+    assert yapyon.loads(out["as_yapyon"]) == {"a": "one"}
+
+
+def test_the_wrap_preserves_the_builtin_api():
+    """Our wrapped writers must still look like ``Builtin`` to the resolver.
+
+    0.3.0 type-checks the argument against ``takes`` before calling a writer, so
+    a plain-lambda wrap raises ``AttributeError: 'function' object has no
+    attribute 'takes'``.  Pin that the fields survive the wrap -- if they do not,
+    every serializer call in the pipeline dies, not just this test.
+    """
+    from yapyon import serializers as ys
+    from persona_grata.yapyon_io import _pruned_serializers
+
+    stock = {name: (b.takes, b.keywords, b.note)
+             for name, b in ys.SERIALIZERS.items()}
+    with _pruned_serializers():
+        assert set(ys.SERIALIZERS) == set(stock)
+        for name, wrapped in ys.SERIALIZERS.items():
+            takes, keywords, note = stock[name]
+            assert isinstance(wrapped, ys.Builtin), name
+            assert wrapped.takes == takes, name
+            assert wrapped.keywords == keywords, name
+            assert wrapped.note == note, name
+
+
+# --------------------------------------------------------------------------- #
 def test_every_shipped_harness_renders_a_parseable_config_file():
     tomllib = pytest.importorskip("tomllib")
     import yaml
@@ -919,9 +1296,16 @@ def test_a_persona_with_a_token_keeps_its_auth_var(tmp_path):
 # --------------------------------------------------------------------------- #
 # The shipped data/ library itself
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("path", sorted(pg.DATA_DIR.glob("*.yaml")), ids=lambda p: p.name)
-def test_shipped_yaml_parses(path):
-    assert yaml.safe_load(path.read_text()) is not None
+@pytest.mark.parametrize("path", sorted(pg.DATA_DIR.rglob("*.tmpl")), ids=lambda p: p.name)
+def test_shipped_template_parses(path):
+    # Parsed the way the loader parses it. A preset can read as plain YAML and
+    # still be a template yapyon rejects, and `yaml.safe_load` would not notice.
+    # The glob was also still `*.yaml` after the rename, so it matched nothing
+    # and this collected zero cases -- a green that asserted nothing at all.
+    # ⚠️ Same trap, second trip: once presets moved to data/<kind>/, a root-level
+    # `*.tmpl` glob matched only agents.tmpl -- 1 case where 23 were intended.
+    # rglob is what keeps this honest as the tree grows.
+    assert pg.load_template(path) is not None
 
 
 @pytest.mark.parametrize("kind,name",
@@ -930,7 +1314,7 @@ def test_shipped_yaml_parses(path):
                          [("dialect", n) for n in pg.preset_names("dialect")] +
                          [("secret", n) for n in pg.preset_names("secret")])
 def test_preset_wrapper_matches_its_filename(kind, name):
-    data = pg.load_yaml(pg.DATA_DIR / f"{kind}.{name}.yaml", pg._env_defaults())
+    data = pg.load_template(pg.kind_dir(kind) / f"{name}.{kind}.tmpl")
     if len(data) == 1:
         assert next(iter(data)) == name
 
@@ -944,7 +1328,7 @@ def test_no_backend_leaves_secret_unset(tmp_path):
 
 
 def test_backend_preset_layers_under_the_entry(tmp_path, monkeypatch):
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     cfg = pg.load_config(write(tmp_path, """
         personas:
           test_user:
@@ -964,7 +1348,7 @@ def test_backend_preset_layers_under_the_entry(tmp_path, monkeypatch):
 
 def test_backend_without_entry_still_layers(tmp_path, monkeypatch):
     # Setup names the missing entry; layering does not invent one.
-    store_cfg(tmp_path, monkeypatch, "secret_backend: gopass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "gopass"\n')
     cfg = pg.load_config(write(tmp_path, _MINIMAL))
     secret = cfg["personas"]["test_user"]["secret"]
     assert secret["backend"] == "gopass"
@@ -987,7 +1371,7 @@ def test_entry_without_backend_is_carried_for_setup_to_refuse(tmp_path, monkeypa
 
 
 def test_unknown_backend_fails_naming_the_known_ones(tmp_path, monkeypatch):
-    store_cfg(tmp_path, monkeypatch, "secret_backend: vault\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "vault"\n')
     with pytest.raises(SystemExit) as exit_info:
         pg.load_config(write(tmp_path, _MINIMAL))
     message = str(exit_info.value)
@@ -998,7 +1382,7 @@ def test_unknown_backend_fails_naming_the_known_ones(tmp_path, monkeypatch):
 
 def test_an_explicit_null_secret_opts_out_despite_a_backend(tmp_path, monkeypatch):
     # Keyless is spelled, not defaulted: a null overwrites the layered mapping.
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     cfg = pg.load_config(write(tmp_path, """
         personas:
           test_user:
@@ -1010,7 +1394,7 @@ def test_an_explicit_null_secret_opts_out_despite_a_backend(tmp_path, monkeypatc
 
 
 def test_a_misspelled_secret_key_warns(tmp_path, monkeypatch, capsys):
-    store_cfg(tmp_path, monkeypatch, "secret_backend: pass\n")
+    store_cfg(tmp_path, monkeypatch, 'secret_backend: "pass"\n')
     pg.load_config(write(tmp_path, """
         personas:
           test_user:

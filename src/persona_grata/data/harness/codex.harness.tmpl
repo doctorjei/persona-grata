@@ -9,22 +9,22 @@ codex:
   harness_desc: "Codex CLI"
   path_var: "CODEX_HOME"
   supported_dialects: ["responses", "chat"]    # ordered by preference
-  config_file: "{{path}}/config.toml"
-  protocol: "{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"
+  config_file: y"{path}/config.toml"
+  protocol: y"{match_first(supported_dialects, mind.dialects)}"
 
   config_store:
-    model: "{{mind.model}}"
-    model_provider: "{{hid}}"
+    model: y"{mind.model}"
+    model_provider: y"{__PARENT__.__PARENT__.__KEY__}"
 
     # Nested maps become TOML tables, so this renders as [model_providers.codex].
     model_providers:
-      "{{hid}}":
-        name: "{{persona_desc}}"
-        wire_api: "{{protocol}}"
-        base_url: "{{mind.dialects[protocol].api_uri}}"
-        env_key: "{{auth_var}}"
+      codex:
+        name: y"{persona_desc}"
+        wire_api: y"{protocol}"
+        base_url: y"{mind.dialects[protocol].api_uri}"
+        env_key: y"{auth_var}"
 
-  content: "{{config_store.__AS_TOML__()}}"
+  content: y"{config_store.__AS_TOML__()}"
 
 ### `protocol` sits at harness level, NOT in config_store: config_store is serialized verbatim, so
 ### a scratch key there would emit a stray `protocol = "responses"` into the user's config.toml.

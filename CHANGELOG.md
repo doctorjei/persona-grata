@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows
 
 - Secret backends: a persona's API key is held by the password manager you already use, rather
   than by a file persona-grata writes. Three ship — `pass`, `gopass`, and `prs` — and each is an
-  ordinary preset (`secret.<name>.yaml`) declaring the commands to fetch and store a key, so a
+  ordinary preset (`data/secret/<name>.secret.tmpl`) declaring the commands to fetch and store a key, so a
   site can add its own. persona-grata never invokes `gpg` itself and has no opinion about the
   encryption: whatever wrote the store reads it back.
 - `secret_backend` names which manager holds every persona's key. One store uses one manager, so
@@ -21,21 +21,38 @@ All notable changes to this project are documented here. The format follows
   then `~/.config/personas`. An explicit `persona_store` setting still outranks all three.
 - `<persona_store>/persona_store.cfg` holds settings that generalise across every persona in a
   store. It is read from wherever the store is, so its settings travel with a relocated store, and
-  it layers between the shipped defaults and your own agents file.
-- The template-resolution spec is published in the repository at `spec/TEMPLATE_RESOLUTION.md`. It
-  was previously reachable only from the maintainers' canon, so `src/` and `tests/` cited a path
-  no contributor or reviewer could open. The canon copy remains the source of truth; the repository
-  copy is a mirror. Rule references in code cite the spec's rule number and letter rather than a
-  line number, and the worked example is cited by heading, so a citation no longer rots as the
-  document grows.
-
-### Fixed
-
-- Citations that named `TEMPLATE_RESOLUTION.md` without its `spec/` path, and one that pointed the
-  worked example at lines 35-48 when it lives in the document's `Examples` section. Reported by
-  yapyon while reviewing the engine.
+  it layers between the shipped presets and your own agents file — for personas too, so a
+  store-wide tweak to a shipped persona takes effect.
+- `env_allow` and `env_add`, in `<persona_store>/persona_store.cfg` only, decide which environment variables a
+  document may read. The default is the standard set (`HOME`, `PATH`, the `XDG_*` directories, and
+  so on); `HOME`, `XDG_CONFIG_HOME`, and `PERSONA_STORE_DIR` are always readable.
 
 ### Changed
+
+- **Breaking:** agents files, presets, and `<persona_store>/persona_store.cfg` are
+  [yapyon](https://pypi.org/project/yapyon/), not YAML. Most files need only their strings quoted.
+  What yapyon refuses, each with a message naming the line and the fix:
+  - unquoted strings — `model: kimi-k3` must be `model: "kimi-k3"`, `personas: [kimi]` must be
+    `personas: ["kimi"]`;
+  - `null`, `~`, `true`, `false` — write `None`, `True`, `False`;
+  - block scalars (`|`, `>`), anchors and aliases, `---` separators, tab indentation, duplicate keys,
+    quoted keys, dotted keys, and an empty file.
+- **Breaking, and silent:** these load without error but mean something different than before:
+  - references are spelled `y"{path}/token"`; the old `"{{path}}/token"` and `"${{path}}/token"`
+    are now plain text, as is `$HOME` in a plain string — write `y"{$HOME}/keys"`;
+  - a document may read only the environment variables the store allows (see `env_allow` /
+    `env_add`); an unlisted `{$MY_VAR}` is refused by name;
+  - an unquoted number is spliced as its value, so `version: 3.10` renders as `3.1` — quote it;
+  - `__AS_JSON__()` writes containers that fit in 100 columns on one line;
+  - `__MATCH_FIRST__(...)` is now `match_first(...)`.
+- **Breaking:** names of personas, harnesses, dialects, and agents are 1–64 ASCII letters, digits,
+  and `_`, and may not start with a digit — kanibako's rule, adopted so a persona one tool accepts
+  the other can see. Non-ASCII names, longer ones, and ones starting with a digit are refused.
+- **Breaking:** an agent with no chosen name is installed as `<persona>_<harness>` (e.g.
+  `kimi_claude`) rather than `<persona>-<harness>`, so every command is a valid name in any POSIX
+  shell. Re-running setup replaces the old command; `--remove` finds either.
+- **Breaking:** Python 3.11 or newer is required (was 3.9), matching yapyon's own floor.
+- PyYAML is no longer a dependency.
 
 - **Breaking:** the chosen-name registry is now `<persona_store>/agent_names.cfg`, renamed from
   `agent_names.yaml`. Names recorded by 0.0.3 are not read; re-run `--name` to restore them.

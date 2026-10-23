@@ -8,7 +8,7 @@
 #
 #     harnesses:
 #       claude:
-#         base_uri: "{{mind.endpoint}}/anthropic"
+#         base_uri: y"{mind.endpoint}/anthropic"
 #
 # which said "for the claude harness, use this URI" -- a fact about the ENDPOINT, stated as a fact
 # about a harness, which is why nothing could reason over it. It sits in the map below now, once,
@@ -20,7 +20,7 @@ kimi:
     endpoint: "https://api.moonshot.ai"
     dialects:
       anthropic:
-        api_uri: "{{endpoint}}/anthropic"
+        api_uri: y"{endpoint}/anthropic"
 
     model: "kimi-k3[1m]"
     model_1: "kimi-k2.7-code" # 262144 (256K)

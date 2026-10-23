@@ -7,8 +7,8 @@ name = "persona-grata"
 version = "0.0.4.dev0"
 description = "Bind AI personas to orchestration harnesses to produce embodied agents."
 readme = "README.md"
-requires-python = ">=3.9"
-dependencies = ["PyYAML>=5.1"]
+requires-python = ">=3.11"
+dependencies = ["yapyon>=0.4.0"]
 authors = [{ name = "Jeremiah Blanchard" }]
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE.md"]
@@ -29,7 +29,7 @@ Repository = "https://github.com/doctorjei/persona-grata"
 Issues = "https://github.com/doctorjei/persona-grata/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "PyYAML>=5.1"]   # tests parse the YAML configs we render
 
 [project.scripts]
 persona-grata = "persona_grata:main"
@@ -39,7 +39,7 @@ pg = "persona_grata:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-persona_grata = ["data/*.yaml"]
+persona_grata = ["data/*.tmpl", "data/*/*.tmpl", "data/functions.contract"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,13 +8,13 @@
 
 
 responses:
-  msg_uri: "{{api_uri}}/v1/responses"
+  msg_uri: y"{api_uri}/v1/responses"
   emb_uri: None
 
   verify:
     # Responses takes a flat `input`, not a `messages` array, so the shared probe body in
     # __init__.py (DEFAULT_BODY) does not fit this protocol.
-    body: '{"model": "{{mind.model}}", "max_output_tokens": 16, "input": "ping"}'
+    body: y'{{"model": "{mind.model}", "max_output_tokens": 16, "input": "ping"}}'
 
 ### This is the row that fixed a live bug. Before dialects, harness.codex.yaml declared no
 ### `verify`, so it inherited /v1/chat/completions from the harness defaults while telling codex

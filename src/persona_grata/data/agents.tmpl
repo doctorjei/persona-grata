@@ -1,0 +1,12 @@
+##################################################################################################
+# Agent Default Entries - Top Level
+#
+
+persona_store: y"{$PERSONA_STORE_DIR}"    # Persona config path (endpoint, harnesses, etc.)
+                                           # $PERSONA_STORE_DIR -> $XDG_CONFIG_HOME/personas
+                                           # -> ~/.config/personas (the fallbacks are supplied
+                                           # as defaults under the real environment)
+personas: {}                               # Map/Dict: {(<persona>: <settings>)*} <REQUIRED>
+secret_backend: {}                         # Password manager holding every persona's key
+                                           # (secret.*.yaml). One store, one manager -- normally
+                                           # set once in <persona_store>/persona_store.cfg

@@ -39,16 +39,19 @@ Persona config path (endpoint, harnesses, etc.)
 
 Maps persona names (keys) to settings (values): `{(<persona>: <settings>)*}`. May be reference(s):
 
-```yaml
-personas: kimi              # one preset
-personas: [kimi, minimax]   # several
+```yapyon
+personas: "kimi"                # one preset
 ```
 
-Such personas, loaded as presents, resolve from templates (e.g., `{{personas.kimi.mind.model}}`).
+```yapyon
+personas: ["kimi", "minimax"]   # several
+```
+
+Such personas, loaded as presets, can be referenced from templates (e.g., `y"{personas.kimi.mind.model}"`).
 
 ### `secret_backend` -> `str`
 - Required: **No**
-- Default: `None`
+- Default: `{}` (no backend)
 
 Which password manager holds every persona's API key — `pass`, `gopass`, or `prs`. One store uses
 one manager, so this is normally set once in `<persona_store>/persona_store.cfg` rather than in an
@@ -56,11 +59,45 @@ agents file. See [Secret Backend Configuration](#secret-backend-configuration-pe
 
 ---
 
+## Store Settings (`<persona_store>/persona_store.cfg`)
+
+The store keeps settings that hold for every persona in it in `<persona_store>/persona_store.cfg`,
+a yapyon file beside the persona directories. Its settings sit between what persona-grata ships
+and your own agents file: they override the shipped presets, and your file overrides them. That
+holds for `personas` entries too, so a store-wide tweak to a shipped persona takes effect.
+
+Besides `secret_backend` and `personas`, two settings are **store-only**. An agents file that sets
+either is refused. Between them they decide which environment variables a document may read as
+`{$NAME}`:
+
+### `env_allow` -> `list[str]`
+- Required: **No**
+- Default: yapyon's standard set (`HOME`, `PATH`, `LANG`, the `XDG_*` directories, and so on)
+
+The variables documents may read, **replacing** the default list.
+
+### `env_add` -> `list[str]`
+- Required: **No**
+- Default: `[]`
+
+Variables to allow **in addition** to `env_allow`.
+
+`HOME`, `XDG_CONFIG_HOME`, and `PERSONA_STORE_DIR` are always readable, whatever the lists say,
+because persona-grata needs them to find the store at all. A variable that is not allowed is
+refused by name rather than read, so a secret in your environment cannot end up in a harness
+config by accident:
+
+```yapyon
+env_add: ["MY_ENDPOINT"]          # now y"{$MY_ENDPOINT}" works in any agents file
+```
+
+---
+
 ## Persona Configuration
 
 These settings go within a single entry for a custom persona configuration:
 
-```yaml
+```yapyon
 personas:
   orion:
     <configuration>
@@ -70,7 +107,7 @@ personas:
 
 ### `persona_desc` -> `str`
 - Required: **No**
-- Default: `"{{__PARENT__.__KEY__}}"`
+- Default: `y"{__PARENT__.__KEY__}"`
 
 Short-form description of the persona; defaults to string representation of persona root key.
 
@@ -78,17 +115,17 @@ Short-form description of the persona; defaults to string representation of pers
 - Required: **No**
 - Default: (Set automatically to the persona's root key)
 
-Persona identifier, supplied for use in templates (e.g. `"{{persona_store}}/{{pid}}"`).
+Persona identifier, supplied for use in templates (e.g. `y"{persona_store}/{pid}"`).
 
 ### `path` -> `str`
 - Required: **No**
-- Default: `"{{persona_store}}/{{__PARENT__.__KEY__}}"`
+- Default: `y"{persona_store}/{__PARENT__.__KEY__}"`
 
 Persona settings path.
 
 ### `token` -> `str`
 - Required: **No**
-- Default: `"{{path}}/token"`
+- Default: `y"{path}/token"`
 
 Auth token/key path (not sent if empty/unset).
 
@@ -120,10 +157,10 @@ Additional model options for harness configuration; not sent if empty/unset.
 
 Where the endpoint serves each wire protocol. Set one to `None` if it is not served:
 
-```yaml
+```yapyon
 mind:
   dialects:
-    anthropic: {api_uri: "{{endpoint}}/anthropic"}
+    anthropic: {api_uri: y"{endpoint}/anthropic"}
     responses: None
 ```
 
@@ -135,7 +172,7 @@ Map/Dict: `{(<harness>: <harness settings>)*}`.
 
 Known harnesses are pre-configured. To disable for a persona, set it to `None`:
 
-```yaml
+```yapyon
 harnesses:
   codex: None
 ```
@@ -147,9 +184,8 @@ harnesses:
 The password manager holding this persona's API key, and the entry within it. See
 [Secret Backend Configuration](#secret-backend-configuration-per-persona) below:
 
-```yaml
+```yapyon
 secret:
-  backend: pass
   entry: "work/kimi"
 ```
 
@@ -159,7 +195,7 @@ secret:
 
 These settings go in a single entry for a custom harness configuration _for a particular persona_:
 
-```yaml
+```yapyon
 personas:
   orion:
     # ...persona settings...
@@ -172,17 +208,17 @@ personas:
 
 ### `harness_desc` -> `str`
 - Required: **No**
-- Default: `"{{__PARENT__.__KEY__}}"`
+- Default: `y"{__PARENT__.__KEY__}"`
 
 Short-form description of the harness; defaults to string representation of harness root key.
 
 ### `agent_desc` -> `str`
 - Required: **No**
-- Default: `"{{pid}}-{{hid}}"`
+- Default: `y"{pid}_{hid}"` (the command the agent is installed as)
 
 Display name for the *agent* (persona bound to a harness). Set per harness to label agents:
 
-```yaml
+```yapyon
 personas:
   orion:
     harnesses:
@@ -194,11 +230,11 @@ personas:
 - Required: **No**
 - Default: (Set automatically to the harness's root key)
 
-Harness identifier, supplied for use in templates (e.g. `model_provider: "{{hid}}"`).
+Harness identifier, supplied for use in templates (e.g. `model_provider: y"{hid}"`).
 
 ### `path` -> `str`
 - Required: **No**
-- Default: `"{{path}}/{{__PARENT__.__KEY__}}"`
+- Default: `y"{path}/{__PARENT__.__KEY__}"`
 
 Path to custom harness settings files.
 
@@ -230,7 +266,7 @@ Main harness config file to write; no-op if this or `content` is empty/unset.
 - Required: **No**
 - Default: `{}`
 
-Config data store used for `content` value. Nested maps become nested JSON, YAML, or TOML objects.
+Config data store used for `content` value. Nested maps become nested JSON, YAML, Yapyon, or TOML.
 
 ### `content` -> `str`
 - Required: **No**
@@ -240,9 +276,14 @@ Content for harness config; often built from `config_store` via transformation c
 
 | Call | Renders as |
 |------|-----------|
-| `"{{config_store.__AS_JSON__()}}"` | Indented JSON |
-| `"{{config_store.__AS_TOML__()}}"` | TOML, nesting maps into tables |
-| `"{{config_store.__AS_YAML__()}}"` | Block-style YAML, keys in declaration order |
+| `y"{config_store.__AS_JSON__()}"`   | Indented JSON |
+| `y"{config_store.__AS_TOML__()}"`   | TOML, nesting maps into tables |
+| `y"{config_store.__AS_YAML__()}"`   | Block-style YAML, keys in declaration order |
+| `y"{config_store.__AS_YAPYON__()}"` | Block-style YAPYON, keys in declaration order |
+
+All four drop unset entries — `""`, `None`, and empty maps — before rendering, so a harness built
+with any of them never sees a key the persona left empty. (Through `0.0.3` `__AS_YAPYON__` was the
+exception and kept them; that asymmetry was closed under `yapyon 0.3.0`.)
 
 ### `supported_dialects` -> `list[str]`
 - Required: **Yes**
@@ -251,7 +292,7 @@ Wire protocols this harness speaks, best first. No match with the persona, no ag
 
 ### `protocol` -> `str`
 - Required: **No**
-- Default: `"{{__MATCH_FIRST__(supported_dialects, mind.dialects)}}"`
+- Default: `y"{match_first(supported_dialects, mind.dialects)}"`
 
 The dialect negotiated for this pairing; indexes the persona's entry for it.
 
@@ -263,25 +304,25 @@ A dialect is a wire protocol (`anthropic`, `chat`, `responses`) mounted under `m
 
 ### `api_uri` -> `str`
 - Required: **No**
-- Default: `"{{endpoint}}"`
+- Default: `y"{endpoint}"`
 
 Mount point for this protocol.
 
 ### `msg_uri` -> `str`
 - Required: **No**
-- Default: `"{{api_uri}}/v1/chat/completions"` (`anthropic`: `/v1/messages`; `responses`: `/v1/responses`)
+- Default: `y"{api_uri}/v1/chat/completions"` (`anthropic`: `/v1/messages`; `responses`: `/v1/responses`)
 
 Completion/message operation.
 
 ### `model_uri` -> `str`
 - Required: **No**
-- Default: `"{{api_uri}}/v1/models"`
+- Default: `y"{api_uri}/v1/models"`
 
 Model listing operation.
 
 ### `emb_uri` -> `str`
 - Required: **No**
-- Default: `"{{api_uri}}/v1/embeddings"` (unset for `anthropic`, `responses`)
+- Default: `y"{api_uri}/v1/embeddings"` (unset for `anthropic`, `responses`)
 
 Embeddings operation.
 
@@ -293,7 +334,7 @@ Auth verification settings.
 
 #### `verify.check_uri` -> `str`
 - Required: **No**
-- Default: `"{{msg_uri}}"`
+- Default: `y"{msg_uri}"`
 
 URL for auth verification (default OpenAI std).
 
