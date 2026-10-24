@@ -386,6 +386,15 @@ def test_registry_failure_rolls_back_new_components(store, monkeypatch):
     assert not (store.root / "store/bad").exists()
 
 
+@pytest.mark.parametrize("supported,protocol", [([], "chat"), (["chat"], "responses")])
+def test_explicit_protocol_cannot_bypass_required_dialect_declarations(store, supported, protocol):
+    definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
+        "agent": {"harness": {"supported_dialects": supported, "protocol": protocol}}}))
+    with pytest.raises(ValueError, match="dialect"):
+        store.create("invalid_protocol", definition)
+    assert store.agents() == {}
+
+
 def test_failed_setup_does_not_leave_unregistered_backend(store, monkeypatch):
     def fail(data):
         raise OSError("disk full")

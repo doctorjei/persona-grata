@@ -331,6 +331,15 @@ class AgentStore:
         endpoint = mind.get("endpoint") if isinstance(mind, dict) else None
         if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
             raise ValueError(f"agent {name!r} requires an http:// or https:// persona endpoint")
+        supported = harness.get("supported_dialects")
+        if not isinstance(supported, list) or not supported or not all(
+                isinstance(dialect, str) and dialect for dialect in supported):
+            raise ValueError("harness.supported_dialects must be a nonempty list of dialect names")
+        dialects = mind.get("dialects")
+        protocol = harness.get("protocol")
+        if (not isinstance(dialects, dict) or not isinstance(protocol, str) or
+                protocol not in supported or not isinstance(dialects.get(protocol), dict)):
+            raise ValueError("harness.protocol must select a shared, enabled dialect")
         if not isinstance(harness.get("name"), str) or not harness["name"]:
             raise ValueError("agent harness requires a name")
         if harness.get("path") != str(path / "harness"):

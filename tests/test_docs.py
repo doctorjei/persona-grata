@@ -130,6 +130,19 @@ def test_reference_fields_match_current_base_templates():
         f"undocumented: {sorted(actual - documented)}; obsolete: {sorted(documented - actual)}")
 
 
+def test_documented_model_fallbacks_match_runtime(tmp_path):
+    text = read("CONFIG_REFERENCE.md")
+    active = text.split("#### `persona.mind.model_active`", 1)[1].split("####", 1)[0]
+    subagent = text.split("#### `persona.mind.model_subagent`", 1)[1].split("####", 1)[0]
+    assert "first" in active and "model_list" in active
+    assert "model_active" in subagent
+    store = AgentStore(tmp_path / "fallbacks")
+    store.create("fallbacks", pg.make_agent("navigator", "codex"))
+    mind = store.load("fallbacks")["agent"]["persona"]["mind"]
+    assert mind["model_active"] == mind["model_list"][0]
+    assert mind["model_subagent"] == mind["model_active"]
+
+
 def test_reference_heading_depth_keeps_nested_fields_distinct():
     for level, name in re.findall(r"^(#{3,4}) `([A-Za-z0-9_.]+)`", read("CONFIG_REFERENCE.md"), re.M):
         expected = 4 if name.count(".") > 1 else 3

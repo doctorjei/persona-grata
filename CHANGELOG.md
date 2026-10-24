@@ -24,7 +24,7 @@ All notable changes to this project are documented here. The format follows
 - **Breaking:** credentials are per agent, using the store's `pass`, `gopass`, or `prs` backend.
   `agent.secret: None` is explicitly keyless; a mapping optionally selects an entry. Plaintext token
   backends and `.secret_path` pointers are removed. Removal retains password-manager entries.
-- Require yapyon 0.5.2 or newer. Saved unfinished documents retain slots and expressions through
+- Require yapyon 0.5.2 or newer within the 0.5 series. Saved unfinished documents retain slots and expressions through
   `Tree.to_source()`; comments/layout are normalized, and unsafe deferred merges are refused.
 - Public configuration examples and documentation checks now follow the agent-first format.
   Bundled presets and offline tests do not claim live harness or paid-endpoint validation.

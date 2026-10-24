@@ -2,7 +2,7 @@
 
 Persona-Grata composes one agent from a persona, a harness, their dialects, and an optional
 password-manager configuration. Configuration is [yapyon](https://pypi.org/project/yapyon/),
-requiring yapyon 0.5.2 or newer; `.cfg` and `.tmpl` describe the same document format.
+requiring yapyon 0.5.2 or newer within the 0.5 series; `.cfg` and `.tmpl` describe the same document format.
 
 ## Agent Store
 
@@ -146,7 +146,8 @@ Cognitive configuration mapping.
 
 #### `persona.mind.endpoint`
 
-Required nonempty connection endpoint, such as `"http://127.0.0.1:11434"`. The base leaves it `None`.
+Required `http://` or `https://` connection endpoint, such as `"http://127.0.0.1:11434"`.
+The base leaves it `None`.
 
 #### `persona.mind.context_size`
 
@@ -158,11 +159,12 @@ Ordered list of model IDs; default `[]`. Harness presets may use this to offer m
 
 #### `persona.mind.model_active`
 
-Active model ID; default `None`. An empty list does not invent a model the server supports.
+Active model ID; defaults to the first entry in `model_list`, or `None` when the list is empty.
+An empty list does not invent a model the server supports.
 
 #### `persona.mind.model_subagent`
 
-Optional subagent model ID; default `None`.
+Optional subagent model ID; defaults to `model_active`, which may be `None`.
 
 #### `persona.mind.dialects`
 
@@ -200,7 +202,8 @@ Short description; defaults to `y"{name}"`.
 
 ### `harness.path`
 
-Harness configuration directory; defaults to `y"{runtime.agent_path}/harness"`.
+Harness configuration directory; `y"{runtime.agent_path}/harness"`. It must stay at that location;
+relocate the agent through the registry, not a harness override.
 
 ### `harness.auth_var`
 
@@ -291,9 +294,9 @@ Optional request body. Empty means use the installer's minimal probe with the ac
 ## Secret Components & Installation
 
 The store selects `pass`, `gopass`, or `prs`. Its composed backend is supplied through
-`runtime.secret_backend`; `agent.secret.entry` selects the key within it. Persona-Grata invokes
-the password manager, not `gpg` directly, and does not create a plaintext token backend or
-`.secret_path` pointer.
+`runtime.secret_backend`; `agent.secret.entry` selects the key within it. Credential reads and writes
+go through the manager, not direct `gpg` encryption. Setup assistance may invoke `gpg` to create a
+recipient key. Persona-Grata does not create a plaintext token backend or `.secret_path` pointer.
 
 ### `secret.name`
 

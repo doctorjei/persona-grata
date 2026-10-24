@@ -83,7 +83,7 @@ places it in `<agent-store>/store/<creation-name>/`. `--path` selects a differen
 
 The registry maps each name to its absolute directory. Renaming an agent changes its name and
 wrapper, not its directory; no symlinks connect names to paths. Names are 1–64 ASCII letters,
-digits, and `_`, and cannot start with a digit.
+digits, and `_`, and cannot start with a digit. `default` and shell reserved words cannot be agent names.
 
 ### Lifecycle
 
@@ -165,7 +165,7 @@ Composed components used by agents are stored in `<agent-store>/personas/`, `<ag
 `<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
 copied into the store.
 
-Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.5.2 or newer), not YAML:
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.5.2 or newer within the 0.5 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
 Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
 a whole value without converting it to text. Runtime supplies the agent directory and secret backend;
