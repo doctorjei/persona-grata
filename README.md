@@ -2,7 +2,7 @@
 
 > **Persona-Grata** is a scaffolding utility that binds AI personas to harnesses to produce
 > an embodied, functional agent. It helps users connect professional LLM orchestration harnesses
-> (e.g., Claude Code, the Codex CLI, and Goose) with customized endpoints.
+> with customized endpoints.
 
 ## Install
 
@@ -10,276 +10,181 @@ Install via pipx, uv, or your other favorite package management tool:
 
 `pipx install persona-grata`
 
+Python 3.11 or newer is required. Install the harness you intend to run separately.
+For keyed agents, install and initialize a supported password manager: `pass`, `gopass`, or `prs`.
+For example, on Debian/Ubuntu:
+
+```bash
+sudo apt install pass gnupg
+```
+
+Keyless agents do not need a password manager.
+
 ## Run
 
-Run it directly:
+`persona-grata` and `pg` are the same command. With no arguments, they list registered agents.
+Creation is explicit and produces one agent, not every pairing of a persona and its harnesses:
 
-`persona-grata <persona> [harness]*`
+```bash
+pg --setup                   # Configure a manager before creating a keyed agent
+pg --create kimi claude --name scout
+pg --create ollama codex --name local_code --no-token
+```
 
-**Examples**
+After setup, open a new shell or source your shell's startup file, then run the chosen name:
 
-To install a persona for the official kimi servers and use it with Claude Code:
+```bash
+scout [arguments]
+```
 
-`persona-grata kimi claude`
-
-If you have custom endpoints or other settings, create and run with an agent file:
-
-`persona-grata custom_agents.yap`
-
-_Read more about configurations in the [Custom Agents Guide](CUSTOM_AGENTS.md)._
-
----
+Use `pg --setup` to configure the store's password manager. Credential verification is optional;
+for keyed agents, `--verify` requests a live check that may incur provider charges. Setup does not
+prove that a server or harness accepts the generated configuration.
 
 ## Overview: Agents, Personas, & Harnesses
 
 We combine a **persona** (representing the mind and experience) with a **harness** (the mechanism
 used to impact the world) to yield an _agent_.
 
-...but what does that actually _mean_?
-
-An _agent_ is an entity that can act on the world around it - it has a model of its universe, an
-inference-based (data-derived) decision-making process, a set of actions, and some knowledge of the
-results of its actions (see also _The Craik Model of Intelligence_.) An agent requires not just
-the ability to _think_, but also the ability to _act_.
-
-A _persona_ is that thinking part of an agent - i.e., its 'mind' (endpoint, model, & parameters)
-and 'experiences' (system prompt, context, etc.)
-
-To interact with the world, we can use a _harness_ (sometimes called an _orchestrator_) to provide
-toolsets and communication mechanisms; these include Claude Code, Codex CLI, Goose, & many others.
-
-By combining a _persona_ with a _harness_, we get the fully embodied _agent_.
-
----
+An _agent_ requires not just the ability to _think_, but also the ability to _act_. A _persona_
+is that thinking part — its endpoint, models, parameters, and context. A _harness_ supplies
+its toolsets and communication mechanisms. A **dialect** describes the wire protocol the two
+sides share.
 
 ## Usage
 
-The utility reads agent definitions from provided Yapyon (.yap) files (which describes how personas
-connect to harnesses) and configures your local environment. The sample `agents-example.yap` file
-can serve as a starting point; the bundled harness profiles are 'ready' to go and do not require
-modification.
-
 ### Known Endpoints & Harnesses
 
-Persona-Grata comes with "out of the box" support for the following endpoints and harnesses;
-for each endpoint, a default persona is derived:
+Bundled presets supply configuration defaults, not a guarantee that every server implements every
+dialect or that every pairing has been tested against a live harness.
 
-| Endpoint for Service  | Persona    |
-|-----------------------|------------|
-| api.moonshot.ai:443   | kimi       |
-| localhost:13305       | lemonade   |
-| localhost:9931        | llamacpp   |
-| localhost:1234        | lmstudio   |
-| localhost:8000        | local_8000 |
-| localhost:8080        | local_8080 |
-| localhost:11434       | ollama     |
-| api.minimax.io:443    | minimax    |
-| api.ai.it.ufl.edu:443 | navigator  |
+| Endpoint for Service | Persona |
+|----------------------|---------|
+| api.moonshot.ai:443 | kimi |
+| localhost:13305 | lemonade |
+| localhost:9931 | llamacpp |
+| localhost:1234 | lmstudio |
+| localhost:8000 | local_8000 |
+| localhost:8080 | local_8080 |
+| localhost:11434 | ollama |
+| api.minimax.io:443 | minimax |
+| api.ai.it.ufl.edu:443 | navigator |
 
 | Application/Tool | Harness |
 |------------------|---------|
-| Claude Code      | claude  |
-| OpenAI Codex CLI | codex   |
-| Goose AI Agent   | goose   |
+| Claude Code | claude |
+| OpenAI Codex CLI | codex |
 
-### Setup an Agent
+### Names & Paths
 
-To setup an agent from a persona and harness, run `persona-grata <persona> [harness]*`:
+An agent's name is independent of its persona, harness, and directory. Several agents may use the
+same persona and harness. Without `--name`, creation uses `<persona>_<harness>` as its name and
+places it in `<agent-store>/store/<creation-name>/`. `--path` selects a different agent directory.
 
-`persona-grata kimi`
+The registry maps each name to its absolute directory. Renaming an agent changes its name and
+wrapper, not its directory; no symlinks connect names to paths. Names are 1–64 ASCII letters,
+digits, and `_`, and cannot start with a digit.
 
-_Sets up kimi for all known harnesses_
-
-`persona-grata minimax claude codex`
-
-_Sets up minimax for use with Claude Code and Codex CLI_
-
-If you need a more customized solution, an agent definition file provides additional flexibility:
-
-**agents.yap**
-
-```yapyon
-personas:
-  orion:
-    persona_desc: "Orion Toolkit"
-    mind:
-      endpoint: "https://api.cybertron.space"
-      model: "alpha-3-on"
-```
-
-Then, run:
-
-`persona-grata agents.yap orion claude`
-
-_Setup the custom persona (Orion Toolkit) with Claude Code._
-
-Or, to install all agents and harnesses, run without persona and/or harness names:
-
-`persona-grata agents.yap`
-
-_Setup every persona in the file with all known harnesses._
-
-`pg` is a shorter alias for the same command: `pg kimi claude`.
-
-### Designations & Names
-
-An agent's **designation** is `<persona>+<harness>`. It names one agent, so it settles the harness
-on its own:
-
-`pg kimi+claude`
-
-_The same as `pg kimi claude`._
-
-A **name** is yours to choose, and is how the agent is invoked. Pass `--name` to set one:
-
-`pg --name scout local_ollama+codex`
-
-_Sets up the agent and installs it as `scout` rather than `local_ollama_codex`._
-
-A name replaces that command rather than adding a second one, so an agent always has exactly one
-way to run it; naming it again renames it. Use the name wherever a designation goes — `pg -r scout`
-removes it, and releases the name. An agent you never name keeps its designation as its name.
-
-### Create a Configuration via CLI
-
-For one-off variants or local model servers, persona configurations can be defined by arguments:
-
-`pg --endpoint http://localhost:8675 --model llama3 --no-token ollama claude`
-
-_Sets up a local Ollama model as the persona "ollama", for Claude Code._
-
-The CLI can also be used to update an existing persona:
-
-`pg --update --model kimi-k2-0905-preview kimi codex`
-
-_Sets kimi up with Codex CLI, using a different model just this once._
-
-By default, a definition is ephemeral, but the configuration can be exported if desired:
-
-`pg --endpoint http://who.dr:99 --model llama3 --no-token --export "clauma.yap" ollama claude`
-
-_Exports the configuration to clauma.yap._
-
-Export, update, and new persona creation are mutually exclusive:
-
-| Flag | New OK? | Existing OK? | Writes? | Reads New? | Reads Existing? |
-|---|---|---|---|---|---|
-|`--export`| Yes | Yes | No | Yes | Yes | 
-|`--update`| No | Yes | Yes | Yes | Yes |
-|`--create`| Yes | No | Yes | Yes | Yes |
-
-The API key/token can be read, verified, then stored directly, replacing any existing key/token:
-
-`pg --token ~/keys/moonshot.key kimi claude`
-
-_Sets kimi up with Claude Code, taking the key from `~/keys/moonshot.key`._
-
-The same settings can also be asked for rather than typed:
-
-`pg -i`
-
-_Asks for a name, description, endpoint, model, key, and harnesses, then offers to save the result._
-_Asks for a name, description, endpoint, model, key, and harnesses, then offers to save the result._
-Interactive mode supplies whatever flags did not, combining one of the actions above; e.g.,
-`pg -i --update kimi` only asks for missing elements. It cannot be paired with `--remove`.
-
-### Remove an Agent
-
-Pass `--remove` (or `-r`) to remove the harness-persona wrapper & harness config directory:
-
-`pg --remove kimi codex`
-
-_Removes the Codex CLI agent for kimi, leaving Claude Code and the stored token alone._
-
-`pg --remove kimi`
-
-_Removes every kimi harness, then asks whether to delete the stored API token, if there is one._
-
-### Interaction
-
-The script automatically adds a shell wrapper to your `.bashrc`, `.zshrc`, or `.profile`, depending
-on your shell. After running setup and sourcing your config (`source ~/.bashrc`) or opening a new
-terminal, you can launch the agent:
+### Lifecycle
 
 ```bash
-<persona>_<harness> [arguments]
+pg                         # List registered agents
+pg scout                   # Show its stored agent document (read-only)
+pg --update scout          # Regenerate an existing agent's configuration
+pg --update scout --name explorer
+pg --export explorer.cfg explorer
+pg --remove explorer
 ```
 
-A `$SHELL` persona-grata doesn't recognise is reported, not assumed; the wrapper is written in
-plain POSIX shell syntax, so any _POSIX_ shell will run it.
+`--create`, `--update`, `--remove`, `--export FILE`, and `--setup` are separate modes. Creation
+accepts a persona and harness, or an agent document; existing-agent operations select one
+registered name. Export writes a reusable, unfinished agent document, not a token or a resolved
+harness settings file.
 
-Names — of personas, harnesses, dialects, and agents — are 1–64 ASCII letters, digits, and `_`,
-and do not start with a digit: the same rule kanibako uses, so every name is a valid shell
-function name.
+For custom endpoints or models, write an agent document rather than defining a variant with
+CLI flags:
+
+**orion.cfg**
+
+```yapyon
+agent<base.agent>:
+  name: "orion"
+  secret: None
+  persona<base.persona>:
+    name: "orion"
+    desc: "Orion Toolkit"
+    mind:
+      endpoint: "https://api.cybertron.space"
+      model_list: ["alpha-3-on"]
+      model_active: "alpha-3-on"
+  harness<claude.harness>: {}
+```
+
+```bash
+pg --create orion.cfg
+```
+
+`secret: None` explicitly makes this example keyless. Remove that setting to use the store's
+configured manager, or supply an entry as described in the [Custom Agent Guide](CUSTOM_AGENTS.md).
+The shipped [agents-example.yaml](agents-example.yaml) is also a single-agent **yapyon** document;
+copy it to a `.cfg` or `.tmpl` file before using it with the CLI.
 
 ### Parameters Summary
 
-| Parameter | Sets |
-|------|------|
-| `--endpoint URL` | Set `mind.endpoint` to `URL` |
-| `--model NAME` | Set `mind.model` to `NAME` |
-| `--desc TEXT` | Set `persona_desc` to `TEXT` |
-| `--no-token` | `token` — no key prompt or verification*^ |
-| `--create` | Stores a new persona; fails if name is taken |
-| `--update` | Replace an existing persona, if it exists |
-| `--export FILE` | Export a template for this configuration to file named `FILE` |
-| `-i`, `--interactive` | Ask for whatever is not given above; offers to save the result |
-| `--token FILE` | Read the API key from `FILE` rather than prompting for it^ |
-| `--name NAME` | Call this agent `NAME`, and install it as the command `NAME` |
-| `--remove`, `-r` | Remove the named agent(s); offers to delete the token |
+| Parameter | Purpose |
+|-----------|---------|
+| `--create` | Create one agent from a persona/harness pair or agent document |
+| `--update` | Update an existing registered agent |
+| `--remove`, `-r` | Remove an agent's registration, wrapper, and generated files |
+| `--export FILE` | Export an agent document without installing it |
+| `--setup` | Configure the store's secret backend |
+| `--backend NAME` | Select `pass`, `gopass`, or `prs` during setup |
+| `--secret-root ROOT` | Set the manager-entry prefix during setup |
+| `--name NAME` | Choose a creation name or rename an existing agent |
+| `--path DIR` | Select the agent directory |
+| `--store DIR` | Select the agent-store root |
+| `--no-token` | Make the agent explicitly keyless |
+| `--token FILE` | Read a token from a supplied file and store it through the manager |
+| `--verify` | Request live credential verification for keyed agents; off by default |
+| `--yes` | Confirm removal without prompting |
+| `--no-wrapper` | Skip shell-wrapper installation |
+| `--force` | Allow export to replace an existing output file |
 
-_*If the `--no-token` flag is not included, connections to keyless-only servers will fail._
+`--path` is creation-only. Credential, verification, and wrapper flags apply to creation/update;
+`--token` and `--no-token` are mutually exclusive. Export selects an existing agent only, and cannot
+overwrite its installed `<agent-directory>/agent.cfg`. See `pg --help` for mode-specific restrictions.
+Removal deletes the entire registered agent directory, including files you added, and its wrapper.
+Shared components and password-manager entries are retained.
 
-_^`--token` and `--no-token` are mutually exclusive._
+## Agent Store & Configuration
 
-## Agent Configuration & Templates
+The root is selected by `--store`, otherwise `AGENT_STORE_DIR`, then `$XDG_CONFIG_HOME/agents`,
+then `~/.config/agents`. `<agent-store>/agent_store.cfg` contains store settings and the name-to-path
+registry. Installed agents have `<agent-directory>/agent.cfg` and `<agent-directory>/harness/`.
+Composed components used by agents are stored in `<agent-store>/personas/`, `<agent-store>/harnesses/`,
+`<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
+copied into the store.
 
-Definitions are managed in an agents file written in [yapyon](https://pypi.org/project/yapyon/), a
-YAML-like format. It describes one or more personas and/or harnesses. Unlike YAML, yapyon has no
-unquoted strings — write `model: "kimi-k3"`, not `model: kimi-k3` — and keys are bare identifiers.
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.5.2 or newer), not YAML:
+quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
+Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
+a whole value without converting it to text. Runtime supplies the agent directory and secret backend;
+agent documents cannot set `agent.path`.
 
-Values can be computed from other values with **y-strings**: `y"{<reference>}"` is replaced by the
-value the reference names, and text around it is kept (`y"{path}/token"`).
-
-- **Context Lookup**: A reference is looked up from where it is written outward, so a value nearby
-  wins (e.g., `{api_uri}`, `{path}`).
-- **Hierarchical References**: Absolute references to any value in the configuration via
-  dot-notation (e.g., `{personas.orion.mind.model}`).
-- **Reserved Identifiers**: `{__PARENT__}` resolves to the immediate parent node in the
-  configuration tree and `{__KEY__}` to a node's own key, so `{__PARENT__.__KEY__}` in a
-  persona definition yields that persona's ID.
-- **Serializers**: a reference ending in `__AS_JSON__()`, `__AS_TOML__()`, `__AS_YAML__()`, or
-  `__AS_YAPYON__()` renders a subtree as a harness file (`content: y"{config_store.__AS_JSON__()}"`).
-  All four drop unset entries — `""`, `None`, empty maps — so the harness never sees a key the
-  persona left empty. `__AS_YAPYON__` is the one that also carries multimaps and bytes.
-- **Subscripts**: any segment may be indexed by another reference (e.g., `{providers[chosen].url}`
-  is "the entry of `providers` named by `chosen`"). Lists index by position — `[1]`, `[-1]` included.
-- **Functions**: `match_first(key_set, items)` yields the first member of `key_set` found among
-  `items`' keys, reading the list as a preference order; it is how a harness and a persona settle on
-  a dialect (`y"{match_first(supported_dialects, mind.dialects)}"`).
-
-A y-string always produces text, so it can splice in a string, number, or `None`, but not a whole
-list or map. A list may hold y-strings as its items (`supported_dialects: [y"{preferred}"]`).
-Write `{{` or `}}` for a literal brace.
-
-Environment variables are read with `{$NAME}` — `y"{$HOME}/agents"` — and an unset one is an error
-rather than an empty string; `{__ENV__("NAME", "fallback")}` supplies a default instead. Only
-variables the store allows can be read (by default the standard ones such as `HOME` and `PATH`;
-see `env_allow` / `env_add` in the [Config Reference Manual](CONFIG_REFERENCE.md)). A plain string
-is never expanded: `"$HOME/agents"` stays exactly that text.
-
-For more about templates & configuration, see the [Config Reference Manual](CONFIG_REFERENCE.md).
+Saved documents preserve unfinished slots and expressions, but their comments and layout are
+normalized. Unsafe deferred merges are refused rather than saved with different semantics.
+See the [Config Reference Manual](CONFIG_REFERENCE.md) for fields, store layout, and migration.
 
 ### Security
 
-To prevent secret leakage:
+Tokens are held by the store's selected password manager, not copied into plaintext token files or
+`.secret_path` pointers. Generated wrappers fetch the key at launch; arrange for the manager to work
+without an unattended passphrase prompt. `--token FILE` is an input source, not a file-token backend.
+An explicit keyless agent neither fetches nor stores a key. If no secret setting or backend is
+configured at creation, keyless operation is saved and reported; configuring a backend later does
+not silently give that existing agent credentials. An explicit secret mapping requires a backend.
 
-- API tokens are stored in files with `0600` permissions.
-- The utility handles tokens by path, avoiding printing secrets to logs or transcripts.
-- A `.secret_path` file is created in the persona's home directory containing the path to the
-  token for discovery by other tools.
-
----
+No live harness or paid-endpoint validation is implied by the bundled presets or offline tests.
 
 ## License & Contributing
 

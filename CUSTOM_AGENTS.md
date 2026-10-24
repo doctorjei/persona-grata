@@ -1,168 +1,174 @@
 # Persona-Grata: Custom Agent Guide
 
-> Persona-Grata allows the configuration of _minds_ (cognitive entity) from settings & _endpoints_
-> (e.g., custom local / remote servers) with existing _harnesses_ (e.g., Claude Code, Codex CLI,
-> Goose) to construct autonomous _agents_ (actors who can write code and/or perform other tasks).
+Persona-Grata combines one persona and one harness into a named agent. Variants are yapyon
+configuration documents, not endpoint/model command-line flags. Start with an agent preset or a
+`.cfg` / `.tmpl` file, then create the agent explicitly.
 
-Known endpoints and harnesses already include their defaults, so required user setup is minimized.
-Custom configurations can be generated and supplied to end users for class, laboratory, and/or
-workplace purposes.
+## A Custom Agent
 
-## Agent Configuration
-
-Agents are configured via a Yapyon (.yap) file with the following minimum elements:
+Save this example as `<working-directory>/orion.cfg`:
 
 ```yapyon
-personas:
-  <persona>:
-    mind:
-      endpoint: <URI, Required>
-```
-
-For example, a typical agent configuration might look like this:
-
-```yapyon
-personas:
-  orion:
-    persona_desc: "Orion Toolkit"
+agent<base.agent>:
+  name: "orion"
+  desc: "Orion Toolkit"
+  secret: None
+  persona<base.persona>:
+    name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
-      model: "alpha-3-on"
+      model_list: ["alpha-3-on"]
+      model_active: "alpha-3-on"
+  harness<claude.harness>: {}
 ```
 
-This example includes harness URL and other customizations:
+```bash
+pg --create orion.cfg
+```
+
+`secret: None` makes this example keyless; it does not prove the example endpoint accepts
+unauthenticated requests. To use a real token, configure a manager with `pg --setup`, remove
+`secret: None`, and supply the token when requested or use `--token FILE`.
+
+[agents-example.yaml](agents-example.yaml) is another complete single-agent document. Its retained
+filename does not change the grammar: it is yapyon, not YAML. Copy it to a `.cfg` or `.tmpl` file
+for use with the CLI.
+
+## Presets & Overrides
+
+A named slot selects a preset; its contents override that preset. For example, a second agent can
+use the same persona and harness with a different model:
 
 ```yapyon
-personas:
-  pax:
-    persona_desc: "Pax Toolkit"
+agent<base.agent>:
+  name: "local_review"
+  secret: None
+  persona<ollama.persona>:
+    mind:
+      model_list: ["review-model"]
+      model_active: "review-model"
+  harness<codex.harness>: {}
+```
+
+```bash
+pg --create local_review.cfg --path ~/agents/review
+```
+
+Names and directories are independent. `--name` can override the document's name at creation, and
+`pg --update local_review --name reviewer` renames it without moving the directory.
+A registered name is the selector for later operations; a persona/harness pair does not uniquely
+identify an agent.
+
+The store saves composed components only when used. It does not install a second copy of the whole
+preset catalog. Installed `<agent-directory>/agent.cfg` uses the same slot format as these examples, and stored
+components allow reloading without the original inheritance files. Explicit source catalogs are a
+Python composition API choice; the CLI does not implicitly search the current directory for
+replacement component presets.
+
+## Protocol Mounts
+
+A persona declares where it serves each dialect; the harness lists which dialects it speaks,
+best first. A shared dialect is required. Disable an unsupported dialect with `None`:
+
+```yapyon
+agent<base.agent>:
+  name: "pax"
+  secret: None
+  persona<base.persona>:
+    name: "pax"
+    desc: "Pax Toolkit"
     mind:
       endpoint: "https://api.moonbase.space"
+      model_list: ["pax-model"]
+      model_active: "pax-model"
       dialects:
-        anthropic:
+        anthropic<anthropic.dialect>:
           api_uri: y"{endpoint}/anthropic_api"
           verify:
             check_uri: y"{api_uri}/verify_me"
-            # Requires traditional Anthropic-style keys:
             key_header: "x-api-key:"
-        responses:
-          api_uri: y"{endpoint}/openai_api"
-    harnesses:
-      claude:
-        harness_desc: "Sneaky Clod"
+        responses: None
+  harness<claude.harness>: {}
 ```
 
-## Resolution of Names & Special Identifiers
+These mounts are declarations, not endpoint discovery. For keyed agents, optional `--verify`
+requests a live credential check, potentially consuming provider tokens. Offline composition/rendering
+tests do not establish compatibility with a live server or installed harness.
 
-To avoid repetitive entry of the same values multiple times, a value may be a yapyon **y-string**,
-`y"…"`, whose `{…}` references resolve to existing, related entries. Identifiers within the
-braces are resolved, where possible, to other values in the configuration tree on a nearest first,
-upward-only fashion; a key can see its "siblings", "parents", and "uncles"/"aunts" (?!), but not
-its "cousins". For example, a value in the harness may refer to `mind` key's child, `endpoint`,
-as follows:
+## Custom Harness Settings
 
-```yapyon
-clod:
-  wrapper_env:
-    CLOD_HOST: y"{mind.endpoint}/misanthropic"          # Yields "https://api.clod.ai/misanthropic"
-```
-
-Special identifiers use dunders (double-underscores) and reference the tree around a value rather
-than a key by name. `__PARENT__` is the mapping a value sits in, and `__KEY__`, which may only follow
-`__PARENT__`, is that mapping's own key:
+Override a bundled harness's `config_store` inside its slot. To define a different harness, use
+`harness<base.harness>` and supply its executable name and supported dialects. Put native settings
+in `config_store`, then serialize them into `content`:
 
 ```yapyon
-clod:
-  harness_desc: y"{__PARENT__.__KEY__}'s fancy harness" # Yields "clod's fancy harness"
-```
-
-Each further `__PARENT__` climbs one level, so from inside `wrapper_env` the harness's key is two up:
-
-```yapyon
-clod:
-  wrapper_env:
-    CLOD_HOST: y"{mind.endpoint}/{__PARENT__.__PARENT__.__KEY__}"  # Yields "https://api.clod.ai/clod"
-```
-
-Environment variables are references too, written `{$NAME}`; a plain string is never expanded, so
-a dollar sign needs no escaping. Write `{{` or `}}` for a literal brace inside a y-string:
-
-```yapyon
-orion:
-  persona_desc: "Costs $5 per run"                       # Yields "Costs $5 per run"
-  path: y"{$HOME}/agents/orion"                          # Yields "/home/you/agents/orion"
-```
-
-## Adding & Removing Harnesses
-
-Every known harness the persona can talk to is configured in addition to those you list; one that
-shares no dialect with it is skipped. To switch a harness off, set it to `None`:
-
-```yapyon
-personas:
-  orion:
+agent<base.agent>:
+  name: "orion_apex"
+  secret: None
+  persona<base.persona>:
+    name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
-    harnesses:
-      codex: None                                        # Claude Code & Goose still configured
+      model_list: ["alpha-3-on"]
+      model_active: "alpha-3-on"
+  harness<base.harness>:
+    name: "apex"
+    supported_dialects: ["chat"]
+    path_var: "APEX_HOME"
+    config_file: y"{path}/config.toml"
+    config_store:
+      model: (persona.mind.model_active)
+      base_url: y"{persona.mind.dialects[protocol].api_uri}"
+    content: y"{PRUNE_CONFIG(config_store).__as_toml__()}"
 ```
 
-A harness you name that isn't known is created from the harness defaults, so a custom harness needs
-only what differs. There are two ways to configure one.
+The `apex` executable in this example is hypothetical; install and validate your own harness.
+Generated files must remain within `<agent-directory>/harness/`. For an environment-driven
+harness, leave `config_file` / `content` unset and set `wrapper_env` instead. `auth_var` names the
+variable that receives the manager-fetched key; do not put a real token into `config_store` or
+`wrapper_env`.
 
-**By config file.** Put the harness's settings in `config_store` & render them into `content` with
-a serializer — `__AS_JSON__()`, `__AS_TOML__()`, `__AS_YAML__()`, or `__AS_YAPYON__()`. Nested maps
-become nested JSON objects, TOML tables, or YAML / Yapyon blocks, and empty/unset entries are
-dropped, so a harness never sees a key the persona left empty. `__AS_YAPYON__()` is the one that
-carries multimaps and bytes, and as of `yapyon 0.3.0` it prunes like the other three:
+## References & Whole Values
+
+Yapyon strings are quoted. A y-string interpolates text, while a parenthesized reference copies
+a value without converting lists, mappings, or `None` to text:
 
 ```yapyon
-personas:
-  orion:
-    mind:
-      endpoint: "https://api.cybertron.space"
-      model: "alpha-3-on"
-    harnesses:
-      apex:
-        supported_dialects: ["chat"]                     # Wire protocols it speaks, best first
-        path_var: "APEX_HOME"                            # Points the harness at its config dir
-        config_file: y"{path}/config.toml"
-        config_store:
-          model: y"{mind.model}"
-          providers:
-            apex:
-              base_url: y"{mind.dialects[protocol].api_uri}"
-              env_key: y"{auth_var}"
-        content: y"{config_store.__AS_TOML__()}"
+label: "Costs $5 per run"
+config_dir: y"{$HOME}/agents"
+model: y"{persona.mind.model_active}"
+models: (persona.mind.model_list)
 ```
 
-**By environment.** Some harnesses cannot be pointed at a per-persona config directory. Use
-`wrapper_env` instead; those variables are exported by the generated shell wrapper, and no config
-file is written. This is how the bundled Goose harness works:
+References use the surrounding scope; use full paths when crossing components. `{$NAME}` reads an
+environment variable only if permitted by the store's `env_allow` / `env_add` policy. A plain
+`"$HOME/agents"` is literal text, not a path expansion. Write `{{` or `}}` for literal braces
+inside a y-string.
 
-```yapyon
-personas:
-  orion:
-    mind:
-      endpoint: "https://api.cybertron.space"
-      model: "alpha-3-on"
-    harnesses:
-      apex:
-        supported_dialects: ["chat"]
-        auth_var: "APEX_API_KEY"
-        wrapper_env:
-          APEX_PROVIDER: "openai"
-          APEX_MODEL: y"{mind.model}"
-          APEX_HOST: y"{mind.dialects[protocol].api_uri}"
+## Credentials, Updates, & Export
+
+`agent.secret: None` is explicitly keyless. A secret mapping may set `entry` instead of the agent
+directory's basename; the store's `secret_root` prefix applies to either. The store chooses one manager
+(`pass`, `gopass`, or `prs`). It fetches credentials at launch and never creates a plaintext token
+backend or `.secret_path` pointer. Keep the manager usable without an unattended passphrase prompt.
+
+```bash
+pg orion                          # Show the saved document; no changes
+pg --update orion revised.cfg     # Replace its definition and reinstall
+pg --export orion-copy.cfg orion  # Export an existing registered agent
+pg --remove orion                 # Confirm removal; manager entries are retained
 ```
 
-Settings that aren't part of the schema are reported as warnings and ignored, so a misspelled key
-is visible rather than silent. Persona, harness, and dialect _names_ are yours to choose, but they
-are 1–64 ASCII letters, digits, and `_`, and may not start with a digit (kanibako's rule, so every
-name is also a valid shell function name); `default` is reserved.
-`config_store` is free-form harness data that is passed through untouched.
+Removal deletes the entire registered agent directory, including any files you added, while
+retaining shared components and password-manager entries.
 
-## Resources
+Export produces a reusable partial agent document, not a resolved harness file. `--force` allows
+replacing an export destination, but never the installed `agent.cfg` itself. Saved documents use
+normalized yapyon: comments and original layout are not retained, and unsafe deferred merges are
+refused. Keep hand-authored source files separately if their formatting matters.
 
-See the [Config Reference Manual](CONFIG_REFERENCE.md) for details about defaults and
-setting non-default options.
+Runtime owns `runtime.agent_path` and `runtime.secret_backend`; do not supply them in agent
+files. `agent.path` is disallowed. Use `--path` at creation and the name-to-path registry afterward.
+There are no legacy schema shims; former persona-matrix files must be rewritten.
+
+See the [Config Reference Manual](CONFIG_REFERENCE.md) for the complete field list and store layout.

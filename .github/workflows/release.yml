@@ -59,8 +59,11 @@ jobs:
       - name: Verify presets ship in the wheel
         run: |
           python -m zipfile -l dist/*.whl > wheel.txt
-          for f in agents.tmpl functions.contract persona/kimi.persona.tmpl \
-                   harness/claude.harness.tmpl dialect/chat.dialect.tmpl secret/pass.secret.tmpl; do
+          for f in global.tmpl functions.contract agents/base.agent.tmpl \
+                   agents/minimax_claude.agent.tmpl personas/base.persona.tmpl \
+                   personas/kimi.persona.tmpl harnesses/claude.harness.tmpl \
+                   harnesses/codex.harness.tmpl dialects/chat.dialect.tmpl \
+                   secret/pass.secret.tmpl; do
             grep -q "persona_grata/data/$f" wheel.txt || { echo "missing from wheel: $f"; exit 1; }
           done
       - name: Verify the installed console scripts run
@@ -68,6 +71,12 @@ jobs:
           pip install dist/*.whl
           persona-grata --help
           pg --help
+          export HOME="$(mktemp -d)"
+          export AGENT_STORE_DIR="$HOME/.config/agents"
+          pg --create minimax claude --no-token --no-wrapper
+          pg minimax_claude --export "$HOME/agent.cfg"
+          pg --update minimax_claude --name smoke --no-wrapper
+          pg --remove smoke --yes
       - uses: actions/upload-artifact@v4
         with:
           name: dist

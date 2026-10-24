@@ -2,25 +2,22 @@
 # Harness Default Settings
 #
 # A harness declares which wire protocols it can speak, best first; the persona declares where it
-# serves each one (mind.dialects). match_first() negotiates between them, yielding the name of
+# serves each one (mind.dialects). MATCH_FIRST() negotiates between them, yielding the name of
 # the winning dialect -- which is both the compatibility answer ("no match" = cannot be built) and
 # the key that locates its URIs.
 
-agent_desc: y"{__PARENT__.__PARENT__.__PARENT__.__KEY__}_{__PARENT__.__KEY__}" # Agent (match cmd;
-                                                                               # persona + harness)
-
-harness_desc: y"{__PARENT__.__KEY__}"            # Harness Short Desc. (defaults to key string)
-path: y"{path}/{__PARENT__.__KEY__}"             # Path to custom harness settings files
-auth_var: "API_KEY"                              # Env. variable holding key/token
-path_var: ""                                     # Store var., harness config path (default: none)
-wrapper_env: {}                                  # Extra env. vars exported by the shell wrapper,
-                                                 #   for harnesses configured by environment rather
-                                                 #   than by a config file. Map: {(<NAME>: <value>)*}
-config_file: ""                                  # Main harness config file (skips if empty/unset)
-config_store: {}                                 # Harness config data (stored in config file)
-content: ""                                      # Content of harness config file (default: empty)
-supported_dialects: None                         # Protocols spoken, best first <REQUIRED>
-protocol: y"{match_first(supported_dialects, mind.dialects)}"   # Negotiated prot.
+harness:
+  name: "base_harness"
+  desc: y"{name}"                                # Harness Short Desc. (defaults to name)
+  path: y"{runtime.agent_path}/harness"          # Path to custom harness settings files
+  auth_var: "API_KEY"                            # Env. variable holding key/token
+  path_var: ""                                   # Store var., harness config path (default: none)
+  wrapper_env: {}                                # Env. vars exported by shell wrapper (conf)
+  config_file: ""                                # Main harness config file (skips if empty/unset)
+  config_store: {}                               # Harness config data (stored in config file)
+  content: ""                                    # Content of harness config file (default: empty)
+  supported_dialects: None                       # Protocols spoken, best first <REQUIRED>
+  protocol: y"{MATCH_FIRST(supported_dialects, persona.mind.dialects)}"   # Negotiated prot.
 
 ### `supported_dialects` is REQUIRED. With the URI and the verification settings both coming from
 ### the negotiated dialect, a harness that declares none has no URI, nothing to verify against and

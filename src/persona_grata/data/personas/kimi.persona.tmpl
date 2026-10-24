@@ -1,0 +1,15 @@
+##################################################################################################
+# Kimi Persona Settings
+
+persona<base.persona>:
+  name: "kimi"
+  desc: "Kimi"
+
+  mind:
+    endpoint: "https://api.moonshot.ai"
+    dialects: {anthropic: {api_uri: y"{endpoint}/anthropic"}}
+    model_list: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3[1m]",
+                 "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"]
+
+    model_active: "kimi-k3.1-pro"
+    context_size: 1000000

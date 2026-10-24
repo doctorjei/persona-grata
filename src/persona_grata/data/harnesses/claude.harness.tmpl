@@ -5,40 +5,36 @@
 # uniform with codex and goose. The /v1/messages path and the anthropic-version header this file
 # used to spell out by hand *were* the dialect; they live in dialect.anthropic.yaml now.
 
-claude:
-  harness_desc: "Claude Code"
+harness<base.harness>:
+  name: "claude"
+  desc: "Claude Code"
   supported_dialects: ["anthropic"]
-  protocol: y"{match_first(supported_dialects, mind.dialects)}"
+  protocol: y"{MATCH_FIRST(supported_dialects, persona.mind.dialects)}"
   auth_var: "ANTHROPIC_AUTH_TOKEN"
   path_var: "CLAUDE_CONFIG_DIR"
   config_file: y"{path}/settings.json"
   config_store:
-    model: y"{mind.model}"
+    model: (persona.mind.model_active)
     env:
-      # Claude Code refuses to start unless this is set -- `Not logged in - Please run /login` --
-      # even against an endpoint needing no key at all. It checks presence, not validity, so a
-      # stand-in is enough. Dropped automatically whenever the persona DOES have a token, leaving
-      # the wrapper's `$(cat <token>)` as the only source; `none` and `null` would be read back as
-      # unset and pruned away, so the value must be neither.
       ANTHROPIC_AUTH_TOKEN: "no-token-required"
-      ANTHROPIC_BASE_URL: y"{mind.dialects[protocol].api_uri}"
-      ANTHROPIC_MODEL: y"{mind.model}"
-      ANTHROPIC_DEFAULT_FABLE_MODEL: y"{mind.model}"
-      ANTHROPIC_DEFAULT_OPUS_MODEL: y"{mind.model_1}"
-      ANTHROPIC_DEFAULT_SONNET_MODEL: y"{mind.model_2}"
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: y"{mind.model_3}"
-      ANTHROPIC_CUSTOM_MODEL_OPTION: y"{mind.model_4}"
-      CLAUDE_CODE_SUBAGENT_MODEL: y"{mind.model}"
+      ANTHROPIC_BASE_URL: y"{persona.mind.dialects[protocol].api_uri}"
+      ANTHROPIC_MODEL: (persona.mind.model_active)
+      ANTHROPIC_DEFAULT_FABLE_MODEL: persona.mind.model_list.__get__(0)?.__str__()
+      ANTHROPIC_DEFAULT_OPUS_MODEL: persona.mind.model_list.__get__(1)?.__str__()
+      ANTHROPIC_DEFAULT_SONNET_MODEL: persona.mind.model_list.__get__(2)?.__str__()
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: persona.mind.model_list.__get__(3)?.__str__()
+      ANTHROPIC_CUSTOM_MODEL_OPTION: persona.mind.model_list.__get__(4)?.__str__()
+      CLAUDE_CODE_SUBAGENT_MODEL: (persona.mind.model_subagent)
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1"
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: persona.mind.context_size?.__str__()
 
-  content: y"{config_store.__AS_JSON__()}"   # should be { model: "foo", env: {env_var: value} }
+  content: y"{PRUNE_CONFIG(config_store).__as_json__()}"
 
 ### Other env options:
 #      ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION: "A great role-model. Ha!"
 #      ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "Billy-Bob"
 #      ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES
-
-#      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
+#
 #      CLAUDE_CODE_EFFORT_LEVEL: "max"
 #      CLAUDE_CODE_ATTRIBUTION_HEADER
 #      CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING

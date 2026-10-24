@@ -1,396 +1,346 @@
 # Configuration Reference Manual
 
-Persona-Grata general, persona, and harness settings structure and default values can be found in
-this manual. This document uses the following definitions throughout:
+Persona-Grata composes one agent from a persona, a harness, their dialects, and an optional
+password-manager configuration. Configuration is [yapyon](https://pypi.org/project/yapyon/),
+requiring yapyon 0.5.2 or newer; `.cfg` and `.tmpl` describe the same document format.
 
-`type NestedDict = dict[str, NestedDict | list[str] | str]`
+## Agent Store
 
-If a value is required, it _must be supplied_ in any custom configuration. Otherwise, a default
-fallback value will be substituted for any absent keys in the configuration.
+The store root is an explicit `--store DIR`, otherwise `AGENT_STORE_DIR`, otherwise
+`$XDG_CONFIG_HOME/agents`, otherwise `~/.config/agents`. Names are registry keys, not directory
+names: renaming an agent does not move its files.
 
-Two conventions apply throughout:
-
-- **`None` means "unset".** Any setting's value may be cleared by assigning `None`.
-- **Unset values are not emitted.** Keys with empty / unset values are omitted from config files.
-
-## Primary Elements
-
-Agents are configured via the definitions of three (3) primary elements:
-
-- **Mind**: The `endpoint` and `model` that provide the cognitive function.
-- **Persona**: Mind plus additional configuration variables / configuration (paths, context, etc.)
-- **Harnesses**: Settings embodying persona in harness (e.g., via templates, environment variables)
-
-Additionally, the communication must be in some **dialect**, which follows some **protocol**; the
-dialects determine which **personas** and **harnesses** can be connected / matched.
----
-
-## Top-Level Configuration
-
-### `persona_store` -> `str`
-- Required: **No**
-- Default: `"$PERSONA_STORE_DIR"`, else `"$XDG_CONFIG_HOME/personas"`
-  (`~/.config/personas` if `$XDG_CONFIG_HOME` unset/empty)
-
-Persona config path (endpoint, harnesses, etc.)
-
-### `personas` -> `NestedDict`
-- Required: **Yes**
-
-Maps persona names (keys) to settings (values): `{(<persona>: <settings>)*}`. May be reference(s):
-
-```yapyon
-personas: "kimi"                # one preset
+```text
+~/.config/agents/
+  agent_store.cfg
+  personas/<id>.persona.tmpl
+  harnesses/<id>.harness.tmpl
+  dialects/<id>.dialect.tmpl
+  secrets/<id>.secret.tmpl
+  store/<creation-name>/
+    agent.cfg
+    harness/
 ```
 
-```yapyon
-personas: ["kimi", "minimax"]   # several
-```
+`--path DIR` can place an agent elsewhere. Registry paths are absolute. There are no name symlinks,
+no `__templates__` directory, and no copied library of every bundled preset. Component files are
+composed, in-use definitions: missing bundled components are materialized when needed, while
+existing stored definitions are reused rather than overwritten by unrelated agent creation.
 
-Such personas, loaded as presets, can be referenced from templates (e.g., `y"{personas.kimi.mind.model}"`).
+### Store Settings (`<agent-store>/agent_store.cfg`)
 
-### `secret_backend` -> `str`
-- Required: **No**
-- Default: `{}` (no backend)
-
-Which password manager holds every persona's API key — `pass`, `gopass`, or `prs`. One store uses
-one manager, so this is normally set once in `<persona_store>/persona_store.cfg` rather than in an
-agents file. See [Secret Backend Configuration](#secret-backend-configuration-per-persona).
-
----
-
-## Store Settings (`<persona_store>/persona_store.cfg`)
-
-The store keeps settings that hold for every persona in it in `<persona_store>/persona_store.cfg`,
-a yapyon file beside the persona directories. Its settings sit between what persona-grata ships
-and your own agents file: they override the shipped presets, and your file overrides them. That
-holds for `personas` entries too, so a store-wide tweak to a shipped persona takes effect.
-
-Besides `secret_backend` and `personas`, two settings are **store-only**. An agents file that sets
-either is refused. Between them they decide which environment variables a document may read as
-`{$NAME}`:
-
-### `env_allow` -> `list[str]`
-- Required: **No**
-- Default: yapyon's standard set (`HOME`, `PATH`, `LANG`, the `XDG_*` directories, and so on)
-
-The variables documents may read, **replacing** the default list.
-
-### `env_add` -> `list[str]`
-- Required: **No**
-- Default: `[]`
-
-Variables to allow **in addition** to `env_allow`.
-
-`HOME`, `XDG_CONFIG_HOME`, and `PERSONA_STORE_DIR` are always readable, whatever the lists say,
-because persona-grata needs them to find the store at all. A variable that is not allowed is
-refused by name rather than read, so a secret in your environment cannot end up in a harness
-config by accident:
+This root mapping is separate from an agent document:
 
 ```yapyon
-env_add: ["MY_ENDPOINT"]          # now y"{$MY_ENDPOINT}" works in any agents file
+format: "agents-yapyon-v0.1"
+secret_backend: None
+secret_root: "persona-grata"
+env_add: ["MY_ENDPOINT"]
+agents:
+  scout:
+    path: "/home/you/.config/agents/store/scout"
 ```
 
----
+| Setting | Type | Meaning |
+|---------|------|---------|
+| `format` | `str` | `"agents-yapyon-v0.1"`; identifies the registry schema |
+| `secret_backend` | `str` or `None` | Store-wide manager: `"pass"`, `"gopass"`, or `"prs"`; `None` means none configured |
+| `secret_root` | `str` | Prefix for manager entries, including explicit entries; default `""` |
+| `env_allow` | `list[str]` | Replaces yapyon's standard environment allowlist when supplied |
+| `env_add` | `list[str]` | Adds readable variables; default `[]` |
+| `agents` | mapping | Agent name to `{path: "/absolute/directory"}` |
 
-## Persona Configuration
+The standard environment allowlist includes `HOME`, `PATH`, `LANG`, and the `XDG_*` directories.
+`HOME`, `XDG_CONFIG_HOME`, and `AGENT_STORE_DIR` remain readable for store location regardless of
+these lists. Store-only environment policy cannot be overridden by an agent document. Environment values are
+available only through permitted yapyon environment references; they are not implicitly expanded
+inside plain strings.
 
-These settings go within a single entry for a custom persona configuration:
+## Agent Documents
+
+An installed `<agent-directory>/agent.cfg` has the same partial slot format as an agent preset.
+It does not flatten the entire component store or include invocation-owned runtime settings.
 
 ```yapyon
-personas:
-  orion:
-    <configuration>
-  pax:
-    <configuration>
+agent<base.agent>:
+  name: "local_code"
+  secret: None
+  persona<ollama.persona>:
+    mind:
+      model_list: ["local-model"]
+      model_active: "local-model"
+  harness<codex.harness>: {}
 ```
 
-### `persona_desc` -> `str`
-- Required: **No**
-- Default: `y"{__PARENT__.__KEY__}"`
+Names of agents and component IDs use 1–64 ASCII letters, digits, and `_`, and do not begin with a
+digit; `default` is reserved. A persona/harness pair is not a unique agent identifier. Default creation names are
+`<persona>_<harness>`; `--name` chooses a different name.
 
-Short-form description of the persona; defaults to string representation of persona root key.
+### `agent.format`
 
-### `pid` -> `str`
-- Required: **No**
-- Default: (Set automatically to the persona's root key)
+String, `"agents-yapyon-v0.1"`, supplied by `base.agent`.
 
-Persona identifier, supplied for use in templates (e.g. `y"{persona_store}/{pid}"`).
+### `agent.name`
 
-### `path` -> `str`
-- Required: **No**
-- Default: `y"{persona_store}/{__PARENT__.__KEY__}"`
+The registered agent's command name. Renaming changes this name and its wrapper, not its path.
 
-Persona settings path.
+### `agent.desc`
 
-### `token` -> `str`
-- Required: **No**
-- Default: `y"{path}/token"`
+Short description; defaults to `y"{name}"`.
 
-Auth token/key path (not sent if empty/unset).
+### `agent.persona`
 
-### `mind` -> `NestedDict`
-- Required: **Yes**
+Required persona slot, normally named as `persona<kimi.persona>`. Overrides within the slot are
+applied to the selected persona. See [Persona Fields](#persona-fields).
 
-Cognitive processing entity configuration.
+### `agent.harness`
 
-#### `mind.endpoint` -> `str`
-- Required: **Yes**
+Required harness slot, normally named as `harness<claude.harness>`. One agent has one harness.
+See [Harness Fields](#harness-fields).
 
-Connection endpoint (e.g., URL).
+### `agent.secret`
 
-#### `mind.model` -> `str`
-- Required: **No**
-- Default: `""`
-
-Primary model to use (not sent if empty/unset).
-
-#### `mind.model_{n}` -> `str`, for n in [1:4]
-- Required: **No**
-- Default: `""`
-
-Additional model options for harness configuration; not sent if empty/unset. 
-
-#### `mind.dialects` -> `NestedDict`
-- Required: **No**
-- Default: (Filled in with known dialects, mounted at `mind.endpoint`)
-
-Where the endpoint serves each wire protocol. Set one to `None` if it is not served:
+`None` explicitly means keyless. A mapping requests manager-backed credentials; its optional
+`entry` replaces the default agent-directory basename. The store's `secret_root` prefix applies
+to either choice (for example, prefix `"persona-grata"` plus entry `"work/scout"` yields
+`"persona-grata/work/scout"`):
 
 ```yapyon
-mind:
-  dialects:
-    anthropic: {api_uri: y"{endpoint}/anthropic"}
-    responses: None
+agent<base.agent>:
+  name: "scout"
+  secret:
+    entry: "work/scout"
+  persona<kimi.persona>: {}
+  harness<claude.harness>: {}
 ```
 
-### `harnesses` -> `NestedDict`
-- Required: **No**
-- Default: (Filled in with known harnesses)
+The password manager is selected once for the store, not independently per agent. At creation,
+omitting `agent.secret` saves `{}` if a manager is configured, otherwise saves `None` and setup
+reports keyless operation. Enabling a manager later does not silently credential an existing keyless
+agent. An explicit secret mapping without a configured backend is an error. Use `--no-token` or
+`secret: None` when no key should be fetched or stored.
 
-Map/Dict: `{(<harness>: <harness settings>)*}`.
+### Runtime-Owned Settings
 
-Known harnesses are pre-configured. To disable for a persona, set it to `None`:
+`runtime.agent_path` and `runtime.secret_backend` are filled by the invocation. Do not put them in
+agent documents or presets. `agent.path` is not a supported field; use `--path` / the registry.
+Harness paths can refer to `runtime.agent_path` without storing an installation-specific location
+in an exported agent document.
+
+## Persona Fields
+
+A component document has a `persona` branch. It may inherit a preset using
+`persona<base.persona>`; inside an agent it occupies `agent.persona`.
+
+### `persona.name`
+
+Persona identifier; default `"base_persona"` in the abstract base.
+
+### `persona.desc`
+
+Short description; defaults to `y"{name}"`.
+
+### `persona.mind`
+
+Cognitive configuration mapping.
+
+#### `persona.mind.endpoint`
+
+Required nonempty connection endpoint, such as `"http://127.0.0.1:11434"`. The base leaves it `None`.
+
+#### `persona.mind.context_size`
+
+Optional context-window size, as an integer; default `None`.
+
+#### `persona.mind.model_list`
+
+Ordered list of model IDs; default `[]`. Harness presets may use this to offer model choices.
+
+#### `persona.mind.model_active`
+
+Active model ID; default `None`. An empty list does not invent a model the server supports.
+
+#### `persona.mind.model_subagent`
+
+Optional subagent model ID; default `None`.
+
+#### `persona.mind.dialects`
+
+Mapping of dialect names to dialect slots. The base supplies `chat`, `responses`, and `anthropic`;
+this is configuration, not server discovery. Set an unsupported dialect to `None`, or override
+its mount point:
 
 ```yapyon
-harnesses:
-  codex: None
+agent<base.agent>:
+  name: "mounted_api"
+  secret: None
+  persona<base.persona>:
+    name: "mounted_api"
+    mind:
+      endpoint: "https://api.example.org"
+      dialects:
+        anthropic<anthropic.dialect>:
+          api_uri: y"{endpoint}/anthropic"
+        responses: None
+  harness<claude.harness>: {}
 ```
 
-### `secret` -> `NestedDict`
-- Required: **No**
-- Default: `None` (this persona has no key)
+## Harness Fields
 
-The password manager holding this persona's API key, and the entry within it. See
-[Secret Backend Configuration](#secret-backend-configuration-per-persona) below:
+A component document has a `harness` branch; inside an agent it occupies `agent.harness`.
+Harness-native configuration under `config_store` is free-form data, not extra persona settings.
 
-```yapyon
-secret:
-  entry: "work/kimi"
-```
+### `harness.name`
 
----
+Harness executable / identifier; the base uses `"base_harness"`.
 
-## Harness Configuration (Per Persona)
+### `harness.desc`
 
-These settings go in a single entry for a custom harness configuration _for a particular persona_:
+Short description; defaults to `y"{name}"`.
 
-```yapyon
-personas:
-  orion:
-    # ...persona settings...
-    harnesses:
-      clod:
-        <configuration>
-      apex:
-        <configuration>
-```
+### `harness.path`
 
-### `harness_desc` -> `str`
-- Required: **No**
-- Default: `y"{__PARENT__.__KEY__}"`
+Harness configuration directory; defaults to `y"{runtime.agent_path}/harness"`.
 
-Short-form description of the harness; defaults to string representation of harness root key.
+### `harness.auth_var`
 
-### `agent_desc` -> `str`
-- Required: **No**
-- Default: `y"{pid}_{hid}"` (the command the agent is installed as)
+Environment variable receiving the fetched token; base default `"API_KEY"`. Keyless setup clears
+references to an unavailable key. A harness that requires a placeholder may declare one in its
+preset; it must not replace a real manager-backed token.
 
-Display name for the *agent* (persona bound to a harness). Set per harness to label agents:
+### `harness.path_var`
 
-```yapyon
-personas:
-  orion:
-    harnesses:
-      claude:
-        agent_desc: "Orion (chat)"
-```
+Environment variable pointing to the harness configuration directory; default `""`.
 
-### `hid` -> `str`
-- Required: **No**
-- Default: (Set automatically to the harness's root key)
+### `harness.wrapper_env`
 
-Harness identifier, supplied for use in templates (e.g. `model_provider: y"{hid}"`).
+Mapping of additional environment variables exported by the shell wrapper; default `{}`.
 
-### `path` -> `str`
-- Required: **No**
-- Default: `y"{path}/{__PARENT__.__KEY__}"`
+### `harness.config_file`
 
-Path to custom harness settings files.
+Main harness settings filename. Empty/unset means no file is written.
 
-### `auth_var` -> `str`
-- Required: **No**
-- Default: `"API_KEY"`
+### `harness.config_store`
 
-Env. variable holding key/token.
+Native configuration mapping, serialized to `content`; default `{}`. For example, the Codex preset
+uses `GEN_CODEX_MODEL_TABLE(persona.name, persona.mind.model_list)` to generate its model table.
 
-### `path_var` -> `str`
-- Required: **No**
-- Default: `""`
+### `harness.content`
 
-Store variable for harness config path.
+Settings file text, usually built from `config_store` with a serializer; default `""`.
 
-### `wrapper_env` -> `NestedDict`
-- Required: **No**
-- Default: `{}`
+### `harness.supported_dialects`
 
-Environment variables exported by shell wrapper in form `{(<NAME>: <value>)*}`
+Required nonempty ordered list, best first. Setup refuses a persona/harness pair with no shared
+dialect rather than claiming it is usable.
 
-### `config_file` -> `str`
-- Required: **No**
-- Default: `""`
+### `harness.protocol`
 
-Main harness config file to write; no-op if this or `content` is empty/unset.
+Selected dialect name, normally `MATCH_FIRST(supported_dialects, persona.mind.dialects)`.
+The chosen dialect supplies both API mount points and verification settings.
 
-### `config_store` -> `NestedDict`
-- Required: **No**
-- Default: `{}`
+## Dialect Fields
 
-Config data store used for `content` value. Nested maps become nested JSON, YAML, Yapyon, or TOML.
+A component document has a `dialect` branch; its values are filled into
+`agent.persona.mind.dialects.<name>`.
 
-### `content` -> `str`
-- Required: **No**
-- Default: `""`
+### `dialect.name`
 
-Content for harness config; often built from `config_store` via transformation calls:
+Dialect identifier; the base uses `"base_dialect"`.
 
-| Call | Renders as |
-|------|-----------|
-| `y"{config_store.__AS_JSON__()}"`   | Indented JSON |
-| `y"{config_store.__AS_TOML__()}"`   | TOML, nesting maps into tables |
-| `y"{config_store.__AS_YAML__()}"`   | Block-style YAML, keys in declaration order |
-| `y"{config_store.__AS_YAPYON__()}"` | Block-style YAPYON, keys in declaration order |
+### `dialect.api_uri`
 
-All four drop unset entries — `""`, `None`, and empty maps — before rendering, so a harness built
-with any of them never sees a key the persona left empty. (Through `0.0.3` `__AS_YAPYON__` was the
-exception and kept them; that asymmetry was closed under `yapyon 0.3.0`.)
+Protocol mount point; defaults to `y"{endpoint}"`.
 
-### `supported_dialects` -> `list[str]`
-- Required: **Yes**
+### `dialect.msg_uri`
 
-Wire protocols this harness speaks, best first. No match with the persona, no agent.
+Completion/message URL. Defaults to `y"{api_uri}/v1/chat/completions"`; the `anthropic` and
+`responses` presets select their respective operations.
 
-### `protocol` -> `str`
-- Required: **No**
-- Default: `y"{match_first(supported_dialects, mind.dialects)}"`
+### `dialect.model_uri`
 
-The dialect negotiated for this pairing; indexes the persona's entry for it.
+Model-listing URL; defaults to `y"{api_uri}/v1/models"`.
 
----
+### `dialect.emb_uri`
 
-## Dialect Configuration (Per Persona)
+Embeddings URL; defaults to `y"{api_uri}/v1/embeddings"`, unset by dialects that do not supply it.
 
-A dialect is a wire protocol (`anthropic`, `chat`, `responses`) mounted under `mind.dialects`.
+### `dialect.verify`
 
-### `api_uri` -> `str`
-- Required: **No**
-- Default: `y"{endpoint}"`
+Optional credential-verification settings for keyed agents. Verification is requested with
+`--verify`, not performed implicitly for every setup; requests may incur provider charges.
+Warnings can indicate a skipped check, so a successful setup exit is not proof of endpoint or
+harness compatibility.
 
-Mount point for this protocol.
+#### `dialect.verify.check_uri`
 
-### `msg_uri` -> `str`
-- Required: **No**
-- Default: `y"{api_uri}/v1/chat/completions"` (`anthropic`: `/v1/messages`; `responses`: `/v1/responses`)
+Verification URL; defaults to `y"{msg_uri}"`.
 
-Completion/message operation.
+#### `dialect.verify.key_header`
 
-### `model_uri` -> `str`
-- Required: **No**
-- Default: `y"{api_uri}/v1/models"`
+Authentication-header prefix; default `"Authorization: Bearer"`.
 
-Model listing operation.
+#### `dialect.verify.headers`
 
-### `emb_uri` -> `str`
-- Required: **No**
-- Default: `y"{api_uri}/v1/embeddings"` (unset for `anthropic`, `responses`)
+Additional header lines; default `[]`.
 
-Embeddings operation.
+#### `dialect.verify.body`
 
-### `verify` -> `NestedDict`
-- Required: **No**
-- Default: N/A
+Optional request body. Empty means use the installer's minimal probe with the active model.
 
-Auth verification settings.
+## Secret Components & Installation
 
-#### `verify.check_uri` -> `str`
-- Required: **No**
-- Default: `y"{msg_uri}"`
+The store selects `pass`, `gopass`, or `prs`. Its composed backend is supplied through
+`runtime.secret_backend`; `agent.secret.entry` selects the key within it. Persona-Grata invokes
+the password manager, not `gpg` directly, and does not create a plaintext token backend or
+`.secret_path` pointer.
 
-URL for auth verification (default OpenAI std).
+### `secret.name`
 
-#### `verify.key_header` -> `str`
-- Required: **No**
-- Default: `"Authorization: Bearer"`
+Backend identifier.
 
-Auth header variant (default OpenAI std).
+### `secret.entry`
 
-#### `verify.headers` -> `list[str]`
-- Required: **No**
-- Default: `[]`
+Manager entry name. An explicit `agent.secret.entry` overrides the generated default.
 
-List of header lines; may be omitted. `content-type: application/json` is always sent.
+### `secret.fetch`
 
-#### `verify.body` -> `str`
-- Required: **No**
-- Default: `""` (minimal `"ping"` completion request using `mind.model`)
+Command printing the key to standard output, used at setup and by the wrapper at launch.
+The manager must be ready for unattended reads; a passphrase prompt can block a launch.
 
-Body for verification call; only used if endpoint rejects standard single-message probe.
+### `secret.store`
 
----
+Command reading the key from standard input, used when importing a token during setup.
+`--token FILE` reads a supplied token into the manager; it does not make that file the backend.
 
-## Secret Backend Configuration (Per Persona)
+### `secret.probe`
 
-A secret backend is the password manager holding a persona's API key. Persona-Grata does not
-encrypt anything and never invokes `gpg` directly: it runs the manager you already use and reads
-the key from that command's output.
+Executable required by the backend. Install and initialize your chosen manager separately, or use
+`pg --setup` for supported setup assistance. Removing an agent does not delete manager entries.
 
-Three backends ship — `pass`, `gopass`, and `prs` — and each supplies the command keys below, so a
-persona normally sets only `entry`; which manager is used is `secret_backend`, set once for the
-store. A site can add its own backend by declaring the same keys, since a backend is a pair of
-commands.
+## Yapyon Composition & Persistence
 
-### `entry` -> `str`
-- Required: **No**
-- Default: `""`
+- A named slot, `persona<kimi.persona>: {}`, fills a component from a preset. Overrides belong
+  inside the slot. Abstract slots such as `persona<>: {}` must be filled before resolution.
+- Strings are quoted. `None`, `True`, and `False` are values, not YAML's `null`, `true`, or `false`.
+- `y"{reference}"` produces text; `(reference)` copies an entire value, retaining its type.
+- `y"{$HOME}/agents"` reads an allowed environment variable; `"$HOME/agents"` is literal text.
+- References resolve from their surrounding scope. Use full paths such as `persona.mind.endpoint`
+  when crossing component boundaries.
+- Harness templates call `PRUNE_CONFIG(config_store)` before a native serializer such as
+  `__as_json__()`, `__as_toml__()`, `__as_yaml__()`, or `__as_yapyon__()`. For example:
+  `y"{PRUNE_CONFIG(config_store).__as_json__()}"`. Pruning omits unset/empty values while retaining
+  `0` and `False`; native serializers alone do not supply this persona-grata policy.
 
-Entry name within the manager's store, relative to its root (e.g. `work/kimi`).
+Composed documents are saved through yapyon's `Tree.to_source()` without resolving remaining slots
+or expressions. This normalizes comments and layout. A deferred merge that cannot be represented
+safely is refused, before an existing output is replaced. The installed agent document remains
+partial; reloading uses the store's composed components rather than relying on original base files.
 
-### `fetch` -> `str`
-- Required: **No**
-- Default: (supplied by the backend)
+## Migration Boundary
 
-Command printing the key on standard output. Run at setup, and again by the shell wrapper at every
-agent launch — so it must not block on a prompt.
-
-### `store` -> `str`
-- Required: **No**
-- Default: (supplied by the backend)
-
-Command reading the key from standard input. Run at setup only. A backend that can only be written
-interactively leaves this unset.
-
-### `probe` -> `str`
-- Required: **No**
-- Default: (supplied by the backend)
-
-Executable that must be present; named in the error when it is missing.
+This agent-first format does not read the former persona matrix,
+`<old-persona-store>/persona_store.cfg`, or `<old-persona-store>/agent_names.cfg` as a compatibility schema. Recreate agents as single-agent slot documents and
+register them by name. `PERSONA_STORE_DIR`, persona-level token paths, `.secret_path`, old designation
+selectors, and endpoint/model override flags are not the new store API. Keep old data until you have
+confirmed the new agents work; no automatic migration or live harness validation is implied.

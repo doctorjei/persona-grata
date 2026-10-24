@@ -1,378 +1,320 @@
-"""Documentation consistency: what the docs claim, checked against the code.
-
-These verify the docs against the data files and the CLI rather than reading
-them for plausibility -- a link that resolves, a YAML example that still loads,
-a schema key that is actually documented. They have caught an unparseable
-example, a persona list that went stale, and a `verify.url` that had been dead
-for a day in a shipped example config.
-
-Everything here reads the *source checkout* (the docs are not installed), so the
-whole module skips when there is no pyproject.toml beside it.
-"""
+"""Check published docs against current agent documents, presets, and CLI help."""
 
 import ast
-import contextlib
-import io
 import json
 import re
-import subprocess
+import shlex
+import tomllib
 from pathlib import Path
 
 import pytest
-import yaml
 import yapyon
 
 import persona_grata as pg
-from persona_grata import yapyon_io
+from persona_grata.cli import _parser, _validate_options
+from persona_grata.composition import KIND_DIRS, load_preset
+from persona_grata.store import AgentStore
+
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = ["README.md", "CUSTOM_AGENTS.md", "CONFIG_REFERENCE.md", "CHANGELOG.md", "AIPOLICY.md"]
-
-pytestmark = pytest.mark.skipif(not (ROOT / "pyproject.toml").exists(),
-                                reason="docs are not part of an installed package")
+DOCS = ("README.md", "CUSTOM_AGENTS.md", "CONFIG_REFERENCE.md", "CHANGELOG.md", "AIPOLICY.md")
+CONFIG_DOCS = DOCS[:3]
+pytestmark = pytest.mark.skipif(
+    not (ROOT / "pyproject.toml").exists(), reason="docs are not installed with the package")
 
 
 @pytest.fixture(autouse=True)
-def fixed_store(monkeypatch):
-    """Pin the store, so a doc example resolves the same way everywhere."""
-    monkeypatch.delenv("PERSONA_STORE_DIR", raising=False)   # outranks XDG
-    monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg")
+def isolated_environment(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("AGENT_STORE_DIR", str(tmp_path / "agents"))
 
 
 def read(name):
-    return (ROOT / name).read_text()
+    return (ROOT / name).read_text(encoding="utf-8")
 
 
 def fenced_blocks(text, tags=("", "yaml", "yapyon")):
-    """Every fenced block whose tag is a config dialect, in order.
-
-    ⚠️ Written as a scanner rather than one regex, because a regex cannot tell a
-    fence *opener* from a fence *closer*. The old
-    ``re.findall(r"```(?:yaml)?\\n(.*?)```", ...)`` matched an opener only for a
-    bare or ```yaml fence, so a block tagged ```yapyon left its **closing** fence
-    to be paired with the next block's opener -- which handed the **prose
-    between two examples** to the parser. That prose is full of lines ending
-    ``as follows:``, and a trailing colon is exactly what makes a YAML scanner
-    say "mapping values are not allowed here". Nine params were failing on
-    nothing but that, none of them a config.
-
-    A block tagged with anything else (```bash, ```text) is now skipped whole,
-    which is what was always meant.
-    """
+    """Scan complete fences, never pairing an ignored opener with another closer."""
     blocks = []
-    open_tag = None
-    buf = []
+    tag = None
+    lines = []
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
-        if open_tag is None:
+        if tag is None:
             if stripped.startswith("```"):
-                open_tag = stripped[3:].strip().lower()
-                buf = []
+                tag = stripped[3:].strip().lower()
+                lines = []
         elif stripped.startswith("```"):
-            if open_tag in tags:
-                blocks.append("".join(buf))
-            open_tag = None
+            if tag in tags:
+                blocks.append("".join(lines))
+            tag = None
         else:
-            buf.append(line)
+            lines.append(line)
     return blocks
 
 
-def load_quietly(path):
-    """``load_config`` with stderr captured; returns the warnings it printed.
-
-    Warnings are the point rather than noise: an unknown key is *ignored*, so a
-    stale setting in a doc example loads perfectly well and does nothing.
-    """
-    stderr = io.StringIO()
-    with contextlib.redirect_stderr(stderr):
-        pg.load_config(str(path))
-    return stderr.getvalue()
+def doc_blocks():
+    return [(name, index, block) for name in CONFIG_DOCS
+            for index, block in enumerate(fenced_blocks(read(name)))]
 
 
-# --------------------------------------------------------------------------- #
-# Links
-# --------------------------------------------------------------------------- #
-def _relative_links():
-    for md in sorted(ROOT.glob("*.md")):
-        for _text, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", md.read_text()):
-            if not target.startswith(("http://", "https://", "#", "mailto:")):
-                yield md.name, target
+BLOCKS = doc_blocks()
+BLOCK_IDS = [f"{name}-{index}" for name, index, _ in BLOCKS]
+_PLAIN_REFERENCE = re.compile(r'(?<![A-Za-z_])"[^"\n]*\{\{?\$?[A-Za-z_][^"\n]*\}[^"\n]*"')
 
 
-@pytest.mark.parametrize("md,target", sorted(set(_relative_links())),
-                         ids=lambda v: v.replace("/", "-"))
-def test_relative_links_resolve(md, target):
-    assert (ROOT / target.split("#")[0]).exists(), f"{md} links to a missing {target}"
+def test_each_configuration_guide_contains_a_complete_agent_example():
+    for name in CONFIG_DOCS:
+        assert any("agent" in yapyon.parse(block) for block in fenced_blocks(read(name))), name
 
 
-# --------------------------------------------------------------------------- #
-# YAML examples
-# --------------------------------------------------------------------------- #
-def _doc_blocks():
+def test_schema_gate_rejects_retired_fields():
+    for retired in ('  path: "/tmp/agent"\n', '  persona<base.persona>:\n    mind:\n      model: "retired"\n'):
+        tree = yapyon.parse('agent<base.agent>:\n' + retired)
+        with pytest.raises(AssertionError, match="unknown field"):
+            _assert_known_fields(tree, "broken example")
+
+
+def test_fence_scanner_skips_other_languages_without_consuming_prose():
+    source = "```bash\npg --help\n```\nprose:\n```yapyon\nname: \"scout\"\n```\n"
+    assert fenced_blocks(source) == ['name: "scout"\n']
+
+
+def relative_links():
     for name in DOCS:
-        for i, block in enumerate(fenced_blocks(read(name))):
-            if "<" in block:                    # a placeholder skeleton, not real YAML
+        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", read(name)):
+            if not target.startswith(("http://", "https://", "#", "mailto:")):
+                yield name, target
+
+
+@pytest.mark.parametrize("name,target", sorted(set(relative_links())))
+def test_relative_links_resolve(name, target):
+    assert (ROOT / target.split("#")[0]).exists(), f"{name} links to missing {target}"
+
+
+def _mapping(handle):
+    return handle.overrides.root if handle.kind == "slot" else handle
+
+
+def _field_names(handle, prefix):
+    """Schema fields, excluding free-form config and per-dialect slot names."""
+    mapping = _mapping(handle)
+    fields = set()
+    for key in mapping.keys():
+        path = f"{prefix}.{key}"
+        fields.add(path)
+        if key in {"mind", "verify"} and mapping[key].kind == "mapping":
+            fields.update(_field_names(mapping[key], path))
+    return fields
+
+
+def schema_fields():
+    fields = set()
+    for kind in KIND_DIRS:
+        fields.update(_field_names(load_preset(("base", kind))[kind], kind))
+    # Secret choice belongs to agent persistence, not the abstract base preset.
+    return fields | {"agent.secret"}
+
+
+def documented_fields():
+    return set(re.findall(r"^#{3,4} `([A-Za-z0-9_.]+)`", read("CONFIG_REFERENCE.md"), re.M))
+
+
+def test_reference_fields_match_current_base_templates():
+    actual = schema_fields()
+    documented = documented_fields()
+    assert actual == documented, (
+        f"undocumented: {sorted(actual - documented)}; obsolete: {sorted(documented - actual)}")
+
+
+def test_reference_heading_depth_keeps_nested_fields_distinct():
+    for level, name in re.findall(r"^(#{3,4}) `([A-Za-z0-9_.]+)`", read("CONFIG_REFERENCE.md"), re.M):
+        expected = 4 if name.count(".") > 1 else 3
+        assert len(level) == expected, f"{name} must be an H{expected} field"
+
+
+def _assert_known_fields(tree, description):
+    """Parsing alone must not certify an ignored, retired setting."""
+    allowed = schema_fields() | {"agent.secret.entry"}
+
+    def visit(handle, kind, prefix):
+        mapping = _mapping(handle)
+        if mapping.kind != "mapping":
+            return
+        for key in mapping.keys():
+            path = f"{prefix}.{key}"
+            assert path in allowed, f"{description} sets unknown field {path}"
+            value = mapping[key]
+            if kind == "agent" and key in {"persona", "harness"}:
+                visit(value, key, key)
+            elif key in {"mind", "verify", "secret"}:
+                visit(value, kind, path)
+            elif kind == "persona" and key == "dialects":
+                dialects = _mapping(value)
+                if dialects.kind == "mapping":
+                    for dialect in dialects.keys():
+                        visit(dialects[dialect], "dialect", "dialect")
+
+    visit(tree["agent"], "agent", "agent")
+
+
+def _assert_rendered(result):
+    agent = result["agent"]
+    assert agent["persona"]["mind"]["endpoint"]
+    harness = agent["harness"]
+    assert isinstance(agent["persona"]["mind"]["dialects"].get(harness["protocol"]), dict)
+    assert harness["protocol"] in harness["supported_dialects"]
+    for value in harness.get("wrapper_env", {}).values():
+        assert not re.search(r"\{(?:persona|runtime|mind)[.}]|\{\{", str(value))
+    content = harness.get("content")
+    filename = harness.get("config_file")
+    if content and filename:
+        suffix = Path(filename).suffix
+        if suffix == ".json":
+            assert isinstance(json.loads(content), dict)
+        elif suffix == ".toml":
+            assert isinstance(tomllib.loads(content), dict)
+
+
+def _load_agent_example(tree, description, tmp_path):
+    _assert_known_fields(tree, description)
+    store = AgentStore(tmp_path / "example-store")
+    # Resolution does not execute the manager. This also exercises keyed examples.
+    store.configure(secret_backend="pass", secret_root="docs")
+    store.create("doc_example", tree)
+    result = store.load("doc_example")
+    _assert_rendered(result)
+    saved = yapyon.parse_file(store.locate("doc_example") / "agent.cfg")
+    assert "runtime" not in saved
+    assert "path" not in _mapping(saved["agent"])
+    return result
+
+
+@pytest.mark.parametrize("name,index,block", BLOCKS, ids=BLOCK_IDS)
+def test_documented_config_parses_and_agent_examples_resolve(name, index, block, tmp_path):
+    assert not _PLAIN_REFERENCE.findall(block), f"{name} block {index} has a literal reference"
+    tree = yapyon.parse(block)
+    if "agent" in tree:
+        result = _load_agent_example(tree, f"{name} block {index}", tmp_path)
+        # Every endpoint reference must resolve through its declared dialect mount.
+        for dialect in result["agent"]["persona"]["mind"]["dialects"].values():
+            if dialect is None:
                 continue
-            yield name, i, block
+            assert isinstance(dialect["api_uri"], str)
+            assert not re.search(r"\{(?:endpoint|api_uri)\}", dialect["api_uri"])
+    elif "format" in tree:
+        # The reference manual's registry example goes through the actual registry reader.
+        store = AgentStore(tmp_path / "registry-example")
+        store.root.mkdir()
+        store.registry_path.write_text(block, encoding="utf-8")
+        assert store.settings["format"] == tree.resolve()["format"]
 
 
-#: A plain (unprefixed) string holding what looks like a reference: `"{x}"`,
-#: `"{{x}}"`, `"${{x}}"`, `"{$X}"`. yapyon reads it as literal text, so an example
-#: spelled this way parses, loads, and silently does nothing -- which is how the
-#: retired `${{...}}` examples survived the gate above for weeks.
-_PLAIN_REFERENCE = re.compile(r'(?<![A-Za-z])"[^"\n]*\{\{?\$?[A-Za-z_][^"\n]*\}[^"\n]*"')
+def test_shipped_example_is_a_complete_agent_document(tmp_path):
+    tree = yapyon.parse_file(ROOT / "agents-example.yaml")
+    assert tree.keys() == ["agent"]
+    result = _load_agent_example(tree, "agents-example.yaml", tmp_path)
+    mind = result["agent"]["persona"]["mind"]
+    assert mind["dialects"]["anthropic"]["api_uri"] == mind["endpoint"] + "/anthropic_api"
+    assert mind["dialects"].get("responses") is None
+    assert result["agent"]["secret"] is None
 
 
-@pytest.mark.parametrize("doc,index,block", list(_doc_blocks()),
-                         ids=lambda v: str(v) if not isinstance(v, str) or "\n" not in v else "")
-def test_no_documented_reference_is_a_plain_string(doc, index, block):
-    stray = _PLAIN_REFERENCE.findall(block)
-    assert not stray, f"{doc} block {index}: {stray} is literal text -- write it as a y-string"
-
-
-@pytest.mark.parametrize("doc,index,block", list(_doc_blocks()),
-                         ids=lambda v: str(v) if not isinstance(v, str) or "\n" not in v else "")
-def test_documented_yaml_parses_and_loads(doc, index, block, tmp_path):
-    # Parsed with yapyon, because that is what reads a user's file now. The gate
-    # has to be stricter than the docs it checks: while this said `yaml.safe_load`
-    # the prose moved to yapyon ahead of the thing validating it, and the gate was
-    # certifying examples in a grammar nobody uses.
-    try:
-        parsed = yapyon.parse(block)
-    except yapyon.AkanError as error:
-        pytest.fail(f"{doc} block {index} is not parseable: "
-                    f"{str(error).splitlines()[0]}")
-    plain = yapyon_io._plain(parsed)
-    if not (isinstance(plain, dict) and "personas" in plain):
-        return                                  # a fragment, not a whole config
-    path = tmp_path / "a.yaml"
-    path.write_text(block)
-    try:
-        warnings = load_quietly(path)
-    except SystemExit as error:
-        # load_config reports a *user* error by exiting rather than raising, and
-        # SystemExit is a BaseException -- so it needs catching on its own.
-        pytest.fail(f"{doc} block {index} is rejected: {error}")
-    # Held to the same bar as the shipped example configs, and for the same
-    # reason: a setting that no longer exists still *loads*, because unknown
-    # keys merge in and are ignored. Parsing is not the interesting failure.
-    unknown = [line for line in warnings.splitlines() if "unknown setting" in line]
-    assert not unknown, (f"{doc} block {index} sets keys that no longer exist: "
-                         + "; ".join(unknown))
-
-
-def _example_configs():
-    return sorted(p.name for p in list(ROOT.glob("*example*.yaml"))
-                 + list(ROOT.glob("*example*.yap")))
-
-
-@pytest.mark.parametrize("name", _example_configs())
-def test_shipped_example_configs_have_no_stale_settings(name):
-    # These ship, and nothing else reads them: agents-example.yaml kept a
-    # `verify.url` for a day after the key was renamed, because an unknown key
-    # merges in, warns, and is ignored. So "it loads" is not the bar.
-    try:
-        warnings = load_quietly(ROOT / name)
-    except SystemExit as error:
-        pytest.fail(f"{name} is rejected: {error}")
-    unknown = [line for line in warnings.splitlines() if "unknown setting" in line]
-    assert not unknown, f"{name} sets keys that no longer exist: " + "; ".join(unknown)
-
-
-# --------------------------------------------------------------------------- #
-# CONFIG_REFERENCE against the schema
-# --------------------------------------------------------------------------- #
-#: Keys that are real but have no line in a schema file. `mind.dialects` is
-#: seeded from the dialect registry; pid/hid are injected by the loader.
-_UNDECLARED_KEYS = {"pid", "hid", "mind.dialects"}
-
-#: Type names that appear in headings without being settings.
-_NOT_KEYS = {"str", "NestedDict"}
-
-
-def schema_keys():
-    """Every key the schema-default templates define -- those files *are* the schema.
-
-    Read through the loader rather than `yaml.safe_load`, so this sees the
-    documents as the code does. Only the key names matter, and both readers
-    agree on them today, but a schema that stops being valid yapyon should fail
-    the docs gate too rather than quietly yielding a short key set.
-
-    Paths come from the loader's own `default_path()` rather than a literal list
-    of filenames: the hand-written ones here outlived two layout changes and then
-    silently yielded a short key set when the defaults moved into data/<kind>/.
-    """
-    keys = set()
-    paths = [pg.DATA_DIR / "agents.tmpl"] + [pg.default_path(kind) for kind in
-                                            ("persona", "harness", "dialect", "secret")]
-    for path in paths:
-        data = pg.load_template(path) or {}
-        for key, value in data.items():
-            keys.add(key)
-            if isinstance(value, dict) and key in ("mind", "verify"):
-                keys |= {f"{key}.{child}" for child in value}
-    # The store-only settings live in persona_store.cfg, not in any shipped schema.
-    return keys | _UNDECLARED_KEYS | set(pg._ENV_SETTINGS)
-
-
-def documented_keys():
-    keys = set()
-    for line in read("CONFIG_REFERENCE.md").splitlines():
-        if not re.match(r"^#{3,} `", line):
-            continue
-        keys |= set(re.findall(r"`([A-Za-z0-9_.]+)`", line))
-        # One heading may stand for a numbered family, written as
-        # `mind.model_{n}` -> ..., for n in [1:4]. Expand it rather than
-        # hardcoding which members are covered.
-        family = re.search(r"`([A-Za-z0-9_.]+)\{n\}`", line)
-        span = re.search(r"for n in \[(\d+):(\d+)\]", line)
-        if family and span:
-            keys |= {f"{family.group(1)}{n}"
-                     for n in range(int(span.group(1)), int(span.group(2)) + 1)}
-    return keys
-
-
-def test_every_schema_key_is_documented():
-    missing = schema_keys() - documented_keys()
-    assert not missing, f"CONFIG_REFERENCE.md documents no {sorted(missing)}"
-
-
-def test_no_documented_key_has_left_the_schema():
-    extra = documented_keys() - schema_keys() - _NOT_KEYS
-    assert not extra, f"CONFIG_REFERENCE.md still documents {sorted(extra)}"
-
-
-def _config_reference_headings():
-    for line in read("CONFIG_REFERENCE.md").splitlines():
-        match = re.match(r"^(#{3,})\s+`([A-Za-z0-9_.]+)`", line)
-        if match:
-            yield len(match.group(1)), match.group(2)
-
-
-@pytest.mark.parametrize("level,key", sorted(set(_config_reference_headings())),
-                         ids=lambda v: str(v))
-def test_heading_depth_mirrors_schema_nesting(level, key):
-    # A dotted key is a child and gets H4; everything else is top level and gets
-    # H3. Getting this wrong reads as though `token` were nested under `path`.
-    want = 4 if "." in key else 3
-    assert level == want, f"`{key}` is H{level}, expected H{want}"
-
-
-# --------------------------------------------------------------------------- #
-# README's preset lists
-# --------------------------------------------------------------------------- #
-def untracked_presets():
-    """Preset ids present in data/ but not committed -- someone's WIP.
-
-    Those are discovered as shipped presets and would fail the list check while
-    they are being written, so they are excused. Empty in CI, and empty without
-    a git checkout.
-    """
-    try:
-        out = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
-                             cwd=ROOT, capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError):
-        return set()
-    # Id is the part BEFORE the first dot, matching preset_names(). The old
-    # layout spelled presets `persona.kimi`, so [-1] was right there; on
-    # `kimi.persona.tmpl` it would yield the kind instead of the id.
-    return {Path(p).stem.split(".", 1)[0] for p in out.split() if "/data/" in p}
-
-
-def readme_column(header):
-    """The values in the README table column named `header`.
-
-    The README now lists shipped presets as markdown tables rather than the
-    `_Label_: a, b, c` lines this gate used to parse. The gate's job is
-    unchanged -- every shipped preset is named somewhere the reader can find --
-    so it reads the column instead of the line.
-    """
-    lines = read("README.md").splitlines()
-    for i, line in enumerate(lines):
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+def table_column(document, header):
+    lines = read(document).splitlines()
+    for index, line in enumerate(lines):
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if header not in cells:
             continue
-        col = cells.index(header)
+        column = cells.index(header)
         values = set()
-        for row in lines[i + 1:]:
-            row = row.strip()
-            if not row.startswith("|"):
-                break                                   # end of the table
-            if set(row.replace("|", "")) <= {"-", ":", " "}:
-                continue                                # the |----| separator
-            values.add(row.strip("|").split("|")[col].strip())
+        for row in lines[index + 1:]:
+            if not row.strip().startswith("|"):
+                break
+            if set(row.replace("|", "").strip()) <= {"-", ":", " "}:
+                continue
+            values.add(row.strip().strip("|").split("|")[column].strip())
         return values
     return set()
 
 
 @pytest.mark.parametrize("header,kind", [("Persona", "persona"), ("Harness", "harness")])
-def test_readme_lists_every_shipped_preset(header, kind):
-    documented = readme_column(header)
-    assert documented, f"README.md has no table with a '{header}' column"
-    excused = untracked_presets()
-    shipped = {name for name in pg.preset_names(kind) if name not in excused}
-    # Set difference in the message, not just `a != b`: the useful half of a
-    # mismatch is which names are missing and which are stale.
+def test_readme_lists_current_shipped_presets(header, kind):
+    directory = ROOT / "src" / "persona_grata" / "data" / KIND_DIRS[kind]
+    shipped = {path.name.removesuffix(f".{kind}.tmpl")
+               for path in directory.glob(f"*.{kind}.tmpl") if path.name != f"base.{kind}.tmpl"}
+    assert shipped, f"no current {kind} presets found"
+    documented = table_column("README.md", header)
     assert documented == shipped, (
-        f"README '{header}' column disagrees with the shipped presets -- "
-        f"missing from README: {sorted(shipped - documented) or 'none'}, "
-        f"not shipped: {sorted(documented - shipped) or 'none'}")
+        f"missing: {sorted(shipped - documented)}; obsolete: {sorted(documented - shipped)}")
 
 
-# --------------------------------------------------------------------------- #
-# Rendered output the config-file check cannot see
-# --------------------------------------------------------------------------- #
-def test_every_wrapper_env_fully_resolves():
-    # A harness configured entirely by environment writes no config file, so the
-    # "renders a parseable config" check skips it and an unresolved template
-    # would reach the user's shell verbatim.
-    with contextlib.redirect_stderr(io.StringIO()):
-        config = pg.load_config()
-    unresolved = {
-        f"{pid}/{hid}": [key for key, value in (harness.get("wrapper_env") or {}).items()
-                         if isinstance(value, str) and "{{" in value]
-        for pid, persona in config["personas"].items()
-        for hid, harness in persona["harnesses"].items()
-    }
-    assert not {k: v for k, v in unresolved.items() if v}
+def test_store_table_matches_current_registry_settings(tmp_path):
+    documented = table_column("CONFIG_REFERENCE.md", "Setting")
+    assert {name.strip("`") for name in documented} == set(AgentStore(tmp_path / "registry").settings)
 
 
-# --------------------------------------------------------------------------- #
-# Version agreement, and the declared Python floor
-# --------------------------------------------------------------------------- #
-#: A PEP 440 pre-release or development suffix, which is what makes a version
-#: a snapshot of unreleased work rather than a release.
-_PRERELEASE = re.compile(r"(\.dev\d*|(?:a|b|rc)\d*)$")
+def test_readme_parameter_table_matches_cli_help():
+    parser = _parser()
+    help_text = parser.format_help()
+    options = set(re.findall(r"--[a-z][a-z-]*", help_text)) - {"--help", "--version"}
+    documented = set().union(*(set(re.findall(r"--[a-z][a-z-]*", cell))
+                               for cell in table_column("README.md", "Parameter")))
+    assert documented == options, (
+        f"undocumented: {sorted(options - documented)}; obsolete: {sorted(documented - options)}")
 
 
-def test_version_agrees_across_the_project():
-    declared = re.search(r'^version = "([^"]+)"', read("pyproject.toml"), re.M).group(1)
-    assert declared == pg.__version__, "pyproject.toml and __version__ disagree"
-    # Compare against the state the version declares, not the string itself: a
-    # pre-release describes work that has not been released, so its section is
-    # [Unreleased]. Demanding a [0.0.4.dev0] heading would put a version nobody
-    # can install into the changelog, and this check would then fail for every
-    # tree between releases -- which is the shape we keep the .dev bump for.
-    expected = "Unreleased" if _PRERELEASE.search(declared) else declared
-    # Match the heading, not the string: every section also has a link
-    # definition at the foot of the file, so a bare `[0.0.3]` search passes on
-    # a changelog that links the version and documents nothing.
-    heading = re.compile(rf"^## \[{re.escape(expected)}\]", re.M)
-    assert heading.search(read("CHANGELOG.md")), f"CHANGELOG.md has no {expected} section"
+def cli_examples():
+    for name in CONFIG_DOCS:
+        for block in fenced_blocks(read(name), tags=("bash", "sh", "shell")):
+            for line in block.splitlines():
+                args = shlex.split(line, comments=True)
+                if args and args[0] in {"pg", "persona-grata"}:
+                    yield name, args[1:]
 
 
-def _source_files():
-    return sorted(p.relative_to(ROOT).as_posix()
-                  for p in list((ROOT / "src").rglob("*.py")) + list((ROOT / "tests").rglob("*.py")))
-
-
-@pytest.mark.parametrize("relative", _source_files())
-def test_sources_parse_under_the_declared_python_floor(relative):
-    # requires-python is a promise; syntax newer than the floor breaks it for
-    # exactly the users who read it before installing.
-    floor = re.search(r'requires-python = ">=(\d+)\.(\d+)"', read("pyproject.toml"))
-    target = (int(floor.group(1)), int(floor.group(2)))
+@pytest.mark.parametrize("name,args", list(cli_examples()))
+def test_documented_cli_examples_have_current_valid_mode_options(name, args):
+    parser = _parser()
     try:
-        ast.parse((ROOT / relative).read_text(), feature_version=target)
+        _validate_options(parser, parser.parse_args(args))
+    except SystemExit as error:
+        pytest.fail(f"{name}: {' '.join(args)} rejected by CLI parser: {error}")
+
+
+def test_version_agrees_with_project_and_changelog():
+    metadata = tomllib.loads(read("pyproject.toml"))["project"]
+    version = metadata["version"]
+    assert version == pg.__version__
+    prerelease = re.search(r"(?:\.dev\d*|(?:a|b|rc)\d*)$", version)
+    section = "Unreleased" if prerelease else version
+    assert re.search(rf"^## \[{re.escape(section)}\]", read("CHANGELOG.md"), re.M)
+
+
+def test_documented_yapyon_floor_matches_declared_dependency():
+    metadata = tomllib.loads(read("pyproject.toml"))["project"]
+    requirement = next(item for item in metadata["dependencies"] if item.startswith("yapyon"))
+    floor = re.search(r">=([0-9.]+)", requirement)
+    assert floor, "yapyon dependency must declare a minimum version"
+    for name in ("README.md", "CONFIG_REFERENCE.md"):
+        assert f"{floor.group(1)} or newer" in read(name), f"{name} has a stale yapyon floor"
+
+
+def source_files():
+    return sorted(path.relative_to(ROOT).as_posix()
+                  for directory in (ROOT / "src", ROOT / "tests") for path in directory.rglob("*.py"))
+
+
+@pytest.mark.parametrize("relative", source_files())
+def test_sources_parse_under_declared_python_floor(relative):
+    requirement = tomllib.loads(read("pyproject.toml"))["project"]["requires-python"]
+    floor = re.search(r">=(\d+)\.(\d+)", requirement)
+    assert floor, "requires-python must declare its minimum version"
+    target = tuple(map(int, floor.groups()))
+    try:
+        ast.parse(read(relative), feature_version=target)
     except SyntaxError as error:
         pytest.fail(f"{relative} is not valid Python {target[0]}.{target[1]}: {error}")

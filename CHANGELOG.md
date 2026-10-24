@@ -8,6 +8,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** agents are single, independently named persona/harness compositions, not entries in
+  a persona-by-harness matrix. Create them explicitly with `--create`; no arguments lists the store,
+  and an existing name displays its saved document. `--update` reinstalls an agent, `--remove` removes
+  one, and `--export FILE` exports one. Endpoint/model override flags and legacy selectors are removed.
+- **Breaking:** the agent-store root is `AGENT_STORE_DIR`, `$XDG_CONFIG_HOME/agents`, or
+  `~/.config/agents`, with explicit `--store` override. `<agent-store>/agent_store.cfg` maps names to absolute paths;
+  the default agent directory is `store/<creation-name>`. Renaming does not move files or use symlinks.
+  The registry uses `format: "agents-yapyon-v0.1"`; legacy persona-store/agent-name schemas are not read.
+- **Breaking:** installed `<agent-directory>/agent.cfg` and presets use yapyon slots. Runtime owns `agent_path` and
+  `secret_backend`; `agent.path` is refused. Composed, in-use components are stored under `personas/`,
+  `harnesses/`, `dialects/`, and `secrets/`, rather than copying a template library.
+- **Breaking:** credentials are per agent, using the store's `pass`, `gopass`, or `prs` backend.
+  `agent.secret: None` is explicitly keyless; a mapping optionally selects an entry. Plaintext token
+  backends and `.secret_path` pointers are removed. Removal retains password-manager entries.
+- Require yapyon 0.5.2 or newer. Saved unfinished documents retain slots and expressions through
+  `Tree.to_source()`; comments/layout are normalized, and unsafe deferred merges are refused.
+- Public configuration examples and documentation checks now follow the agent-first format.
+  Bundled presets and offline tests do not claim live harness or paid-endpoint validation.
+- The Goose harness preset is no longer bundled; the current harness catalog contains Claude Code
+  and Codex CLI.
+
+### Added
+
+- `--setup` for store-level password-manager setup, `--path` for a custom creation directory, and
+  optional `--verify` for live API verification. Token files are import sources, not credential stores.
+- Codex model tables generated from a persona's ordered model list.
+
+## [0.0.4.post1] — 2026-10-24
+
+### Fixed
+
+- Bound yapyon to `>=0.4.0,<0.5` for the 0.0.4 line, which uses its pre-0.5 mapping API.
+
 ## [0.0.4] — 2026-10-23
 
 ### Added
@@ -244,7 +279,8 @@ First release.
   permissions and referenced by path via a `.secret_path` file.
 - Shell wrapper installation into `.bashrc` / `.zshrc`, launched as `<persona>-<harness>`.
 
-[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.4.post1...HEAD
+[0.0.4.post1]: https://github.com/doctorjei/persona-grata/compare/v0.0.4...v0.0.4.post1
 [0.0.4]: https://github.com/doctorjei/persona-grata/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/doctorjei/persona-grata/compare/v0.0.2...v0.0.3
 [0.0.3.dev1]: https://pypi.org/project/persona-grata/0.0.3.dev1/

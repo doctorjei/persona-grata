@@ -5,26 +5,32 @@
 # Responses but works over Chat, so the winning protocol depends on the persona it is bound to,
 # and `wire_api` names whichever it got.
 
-codex:
-  harness_desc: "Codex CLI"
+harness<base.harness>:
+  name: "codex"
+  desc: "Codex CLI"
   path_var: "CODEX_HOME"
   supported_dialects: ["responses", "chat"]    # ordered by preference
   config_file: y"{path}/config.toml"
-  protocol: y"{match_first(supported_dialects, mind.dialects)}"
+  protocol: y"{MATCH_FIRST(supported_dialects, persona.mind.dialects)}"
 
   config_store:
-    model: y"{mind.model}"
-    model_provider: y"{__PARENT__.__PARENT__.__KEY__}"
+    model: (persona.mind.model_active)
+    model_provider: (persona.name)
 
     # Nested maps become TOML tables, so this renders as [model_providers.codex].
     model_providers:
-      codex:
-        name: y"{persona_desc}"
+      y"{persona.name}":
+        name: y"{persona.desc}"
         wire_api: y"{protocol}"
-        base_url: y"{mind.dialects[protocol].api_uri}"
+        base_url: y"{persona.mind.dialects[protocol].api_uri}"
         env_key: y"{auth_var}"
 
-  content: y"{config_store.__AS_TOML__()}"
+    models: GEN_CODEX_MODEL_TABLE(persona.name, persona.mind.model_list)
+
+  content: y"{PRUNE_CONFIG(config_store).__as_toml__()}"
+
+
+# For later: http_headers = { "X-Account-Id" = "your-account-id", "User-Agent" = "Codex" }
 
 ### `protocol` sits at harness level, NOT in config_store: config_store is serialized verbatim, so
 ### a scratch key there would emit a stray `protocol = "responses"` into the user's config.toml.

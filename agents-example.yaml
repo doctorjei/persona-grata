@@ -1,33 +1,16 @@
-persona_store: "~/.alternative_config/personas"
-
-personas:
-  # Nice and simple example; endpoint-only, no model selection.
-  easy_api:
-    mind:
-      endpoint: "https://api.easypeasy.org"
-
-  # A more typical configuration (endpoint URL & model)
-  orion:
-    persona_desc: "Orion Toolkit"
+# This is yapyon, not YAML. Copy to orion.cfg for `pg --create orion.cfg`.
+agent<base.agent>:
+  name: "orion"
+  desc: "Orion Toolkit"
+  secret: None
+  persona<base.persona>:
+    name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
-      model: "alpha-3-on"
-
-  # Highly customized agent (paths, URLs, etc.)
-  pax:
-    persona_desc: "Pax Toolkit"
-    mind:
-      endpoint: "https://api.moonbase.space"
+      model_list: ["alpha-3-on"]
+      model_active: "alpha-3-on"
       dialects:
-        anthropic:
-          api_uri: "{{endpoint}}/anthropic_api"
-          verify:
-            check_uri: "{{api_uri}}/verify_me"
-            # Requires traditional Anthropic-style keys:
-            key_header: "x-api-key:"
-        responses:
-          api_uri: "{{endpoint}}/openai_api"
-    harnesses:
-      claude:
-        harness_desc: "Sneaky Claude"
-        path: "~/my/secret/claude"
+        anthropic<anthropic.dialect>:
+          api_uri: y"{endpoint}/anthropic_api"
+        responses: None
+  harness<claude.harness>: {}

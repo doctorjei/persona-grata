@@ -1,0 +1,20 @@
+##################################################################################################
+# Dialect Default Settings
+#
+# A *dialect* is the wire protocol spoken over an endpoint. A harness lists the ones it speaks
+# (`supported_dialects`, best first), a persona says where its endpoint serves each
+# (`mind.dialects`), and MATCH_FIRST() negotiates between them. Each dialect seeds the persona's
+# `mind.dialects.<name>`, which the persona overrides where a protocol is mounted off the root.
+
+dialect:
+  name: "base_dialect"
+  api_uri: y"{endpoint}"                         # Where this protocol is mounted
+  msg_uri: y"{api_uri}/v1/chat/completions"      # Completion/message op. (default OpenAI std)
+  model_uri: y"{api_uri}/v1/models"              # Model listing op. (default OpenAI std)
+  emb_uri: y"{api_uri}/v1/embeddings"            # Embeddings op. (default OpenAI std)
+
+  verify:                                        # Auth verification settings for this protocol
+    check_uri: y"{msg_uri}"                      # URL for auth verification (default: msg_uri)
+    key_header: "Authorization: Bearer"          # Auth header variant (default OpenAI std)
+    headers: []                                  # Headers the protocol requires. List: [<text>*]
+    body: ""                                     # Probe body (default: minimal "ping" request)

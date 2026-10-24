@@ -44,7 +44,7 @@ case_sensitive = true   # identifiers; `Chat()` is a different thing
 # make it pass again is to delete the declaration too, which is a visible edit.
 [[gate]]
 command = "pytest -q"
-note = "the suite itself, on 3.9 / 3.11 / 3.13"
+note = "the suite itself, on Python 3.11 and 3.13"
 
 [[gate]]
 command = "kinemata check"

@@ -1,0 +1,11 @@
+##################################################################################################
+# Agent Default Entries - Top Level
+#
+
+agent<base.agent>:
+  name: "minimax_claude"                 # The agent's name
+  persona<minimax.persona>: {}
+  harness<claude.harness>:
+    config_store:
+      env:
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: "1000000"
