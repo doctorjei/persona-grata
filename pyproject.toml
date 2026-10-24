@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "persona-grata"
-version = "0.0.4"
+version = "0.0.4.post1"
 description = "Bind AI personas to orchestration harnesses to produce embodied agents."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["yapyon>=0.4.0"]
+dependencies = ["yapyon>=0.4.0,<0.5"]
 authors = [{ name = "Jeremiah Blanchard" }]
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE.md"]

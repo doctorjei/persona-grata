@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.4.post1] — 2026-10-24
+
+### Fixed
+
+- Pin `yapyon` below 0.5. yapyon 0.5.0 changed its parser API, and 0.0.4's open-ended
+  `yapyon>=0.4.0` let a fresh install pick it up, after which every command except `--help`
+  failed with `AttributeError: module 'yapyon' has no attribute 'Mapping'`. No other changes.
+
 ## [0.0.4] — 2026-10-23
 
 ### Added
@@ -244,7 +252,8 @@ First release.
   permissions and referenced by path via a `.secret_path` file.
 - Shell wrapper installation into `.bashrc` / `.zshrc`, launched as `<persona>-<harness>`.
 
-[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/doctorjei/persona-grata/compare/v0.0.4.post1...HEAD
+[0.0.4.post1]: https://github.com/doctorjei/persona-grata/compare/v0.0.4...v0.0.4.post1
 [0.0.4]: https://github.com/doctorjei/persona-grata/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/doctorjei/persona-grata/compare/v0.0.2...v0.0.3
 [0.0.3.dev1]: https://pypi.org/project/persona-grata/0.0.3.dev1/
