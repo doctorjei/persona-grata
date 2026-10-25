@@ -113,8 +113,8 @@ def test_keyless_stays_keyless_after_backend_configured(store):
     resolved = store.load("local")
     assert resolved["agent"]["secret"] is None
     assert resolved["runtime"]["secret_backend"] == {}
-    assert "env_key" not in tomllib.loads(resolved["agent"]["harness"]["content"])[
-        "model_providers"]["ollama"]
+    assert tomllib.loads(resolved["agent"]["harness"]["content"])[
+        "model_providers"]["ollama"]["env_key"] == ""
 
 
 @pytest.mark.parametrize("definition", [
@@ -252,21 +252,27 @@ content: y"{PRUNE_CONFIG(config).__as_json__()}"
                                     for path in sorted((DATA_DIR / "personas").glob("*.persona.tmpl"))
                                     if not path.name.startswith("base.")])
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_every_supported_pair_renders_without_freezing_none(store, persona, harness):
+def test_every_supported_pair_renders_without_pg_functions(store, persona, harness, monkeypatch):
+    monkeypatch.setattr(yio, "contract", lambda: None)
     name = f"{persona}_{harness}"
     store.create(name, make_agent(persona, harness))
     resolved = store.load(name)
     content = resolved["agent"]["harness"]["content"]
     native = json.loads(content) if harness == "claude" else tomllib.loads(content)
     assert native
-    assert '"None"' not in content
     mind = resolved["agent"]["persona"]["mind"]
     if mind["model_list"]:
         assert mind["model_active"] == mind["model_list"][0]
         assert mind["model_subagent"] == mind["model_active"]
+        assert native["model"] == mind["model_active"]
     else:
         assert mind["model_active"] is None
-        assert "model" not in native
+        if harness == "claude":
+            assert native["model"] is None
+        else:
+            assert "model" not in native
+            assert native["@_lexemes"]["model"] == "None"
+            assert native["models"] == {}
 
 
 @pytest.mark.parametrize("definition", [

@@ -11,7 +11,7 @@ harness<base.harness>:
   path_var: "CODEX_HOME"
   supported_dialects: ["responses", "chat"]    # ordered by preference
   config_file: y"{path}/config.toml"
-  protocol: y"{MATCH_FIRST(supported_dialects, persona.mind.dialects)}"
+  protocol: [dialect for dialect in supported_dialects if persona.mind.dialects.__get__(dialect) is not None][0]
 
   config_store:
     model: (persona.mind.model_active)
@@ -25,9 +25,12 @@ harness<base.harness>:
         base_url: y"{persona.mind.dialects[protocol].api_uri}"
         env_key: y"{auth_var}"
 
-    models: GEN_CODEX_MODEL_TABLE(persona.name, persona.mind.model_list)
+    models: {
+      model_id: {provider: (persona.name), remote_model_id: (model_id)}
+      for model_id in persona.mind.model_list
+    }
 
-  content: y"{PRUNE_CONFIG(config_store).__as_toml__()}"
+  content: y"{config_store.__as_toml__()}"
 
 
 # For later: http_headers = { "X-Account-Id" = "your-account-id", "User-Agent" = "Codex" }

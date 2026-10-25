@@ -9,7 +9,7 @@ harness<base.harness>:
   name: "claude"
   desc: "Claude Code"
   supported_dialects: ["anthropic"]
-  protocol: y"{MATCH_FIRST(supported_dialects, persona.mind.dialects)}"
+  protocol: [dialect for dialect in supported_dialects if persona.mind.dialects.__get__(dialect) is not None][0]
   auth_var: "ANTHROPIC_AUTH_TOKEN"
   path_var: "CLAUDE_CONFIG_DIR"
   config_file: y"{path}/settings.json"
@@ -28,7 +28,7 @@ harness<base.harness>:
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1"
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: persona.mind.context_size?.__str__()
 
-  content: y"{PRUNE_CONFIG(config_store).__as_json__()}"
+  content: y"{config_store.__as_json__()}"
 
 ### Other env options:
 #      ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION: "A great role-model. Ha!"

@@ -2,7 +2,7 @@
 
 Persona-Grata composes one agent from a persona, a harness, their dialects, and an optional
 password-manager configuration. Configuration is [yapyon](https://pypi.org/project/yapyon/),
-requiring yapyon 0.5.2 or newer within the 0.5 series; `.cfg` and `.tmpl` describe the same document format.
+requiring yapyon 0.5.3 or newer within the 0.5 series; `.cfg` and `.tmpl` describe the same document format.
 
 ## Agent Store
 
@@ -226,7 +226,14 @@ Main harness settings filename. Empty/unset means no file is written.
 ### `harness.config_store`
 
 Native configuration mapping, serialized to `content`; default `{}`. For example, the Codex preset
-uses `GEN_CODEX_MODEL_TABLE(persona.name, persona.mind.model_list)` to generate its model table.
+generates its model table with a dictionary comprehension:
+
+```yapyon
+models: {
+  model_id: {provider: (persona.name), remote_model_id: (model_id)}
+  for model_id in persona.mind.model_list
+}
+```
 
 ### `harness.content`
 
@@ -239,8 +246,14 @@ dialect rather than claiming it is usable.
 
 ### `harness.protocol`
 
-Selected dialect name, normally `MATCH_FIRST(supported_dialects, persona.mind.dialects)`.
-The chosen dialect supplies both API mount points and verification settings.
+Selected dialect name, normally the first enabled dialect in `supported_dialects` order:
+
+```yapyon
+protocol: [dialect for dialect in supported_dialects if persona.mind.dialects.__get__(dialect) is not None][0]
+```
+
+The required `[0]` fails if no dialect matches. The chosen dialect supplies both API mount points
+and verification settings.
 
 ## Dialect Fields
 
@@ -330,10 +343,11 @@ Executable required by the backend. Install and initialize your chosen manager s
 - `y"{$HOME}/agents"` reads an allowed environment variable; `"$HOME/agents"` is literal text.
 - References resolve from their surrounding scope. Use full paths such as `persona.mind.endpoint`
   when crossing component boundaries.
-- Harness templates call `PRUNE_CONFIG(config_store)` before a native serializer such as
-  `__as_json__()`, `__as_toml__()`, `__as_yaml__()`, or `__as_yapyon__()`. For example:
-  `y"{PRUNE_CONFIG(config_store).__as_json__()}"`. Pruning omits unset/empty values while retaining
-  `0` and `False`; native serializers alone do not supply this persona-grata policy.
+- Bundled harnesses serialize `config_store` directly, for example
+  `y"{config_store.__as_json__()}"` or `y"{config_store.__as_toml__()}"`. Persona-Grata does not prune
+  empty or unset values from native output. JSON preserves `None` as `null`; TOML has no null value,
+  so yapyon omits `None`-valued mapping fields and records their source spelling under `@_lexemes`.
+  Empty strings, lists and mappings, `0`, and `False` remain where the native format represents them.
 
 Composed documents are saved through yapyon's `Tree.to_source()` without resolving remaining slots
 or expressions. This normalizes comments and layout. A deferred merge that cannot be represented

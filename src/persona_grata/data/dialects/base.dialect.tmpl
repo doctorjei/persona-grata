@@ -3,7 +3,7 @@
 #
 # A *dialect* is the wire protocol spoken over an endpoint. A harness lists the ones it speaks
 # (`supported_dialects`, best first), a persona says where its endpoint serves each
-# (`mind.dialects`), and MATCH_FIRST() negotiates between them. Each dialect seeds the persona's
+# (`mind.dialects`), and the first enabled match wins. Each dialect seeds the persona's
 # `mind.dialects.<name>`, which the persona overrides where a protocol is mounted off the root.
 
 dialect:

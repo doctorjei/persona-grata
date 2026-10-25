@@ -119,7 +119,7 @@ agent<base.agent>:
     config_store:
       model: (persona.mind.model_active)
       base_url: y"{persona.mind.dialects[protocol].api_uri}"
-    content: y"{PRUNE_CONFIG(config_store).__as_toml__()}"
+    content: y"{config_store.__as_toml__()}"
 ```
 
 The `apex` executable in this example is hypothetical; install and validate your own harness.

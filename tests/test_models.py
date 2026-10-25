@@ -32,7 +32,7 @@ def contract():
 
 
 @pytest.mark.parametrize("models", [[], ["m1"], ["m-1", "m/2", 'm"3']])
-def test_codex_model_table_renders_through_contract(contract, models):
+def test_codex_model_table_renders_without_contract(models):
     tree = yapyon.parse('''runtime:
   agent_path: "/tmp/example-agent"
 agent:
@@ -55,7 +55,9 @@ agent:
         yapyon.parse_file(DATA / "harnesses/base.harness.tmpl"))
     assert not tree.slots()
 
-    resolved = tree.resolve(contract=contract)
+    restored = yapyon.parse(tree.to_source())
+    resolved = restored.resolve()
+    assert resolved == tree.resolve()
     harness = resolved["agent"]["harness"]
     native = tomllib.loads(harness["content"])
     expected = {
@@ -63,9 +65,7 @@ agent:
         for model in models
     }
     assert harness["config_store"]["models"] == expected
-    assert native.get("models", {}) == expected
-    if not models:
-        assert "models" not in native
+    assert native["models"] == expected
     assert native["model"] == "m1"
     assert native["model_provider"] == "test-provider"
     assert native["model_providers"]["test-provider"]["base_url"] == "https://example.invalid"
