@@ -7,7 +7,8 @@ import pytest
 import yapyon
 
 from persona_grata.composition import (
-    DATA_DIR, KIND_DIRS, compose, compose_preset, load_preset, write_document,
+    DATA_DIR, KIND_DIRS, MAX_SOURCE_BYTES, compose, compose_preset, load_preset, write_document,
+    write_record,
 )
 
 
@@ -108,6 +109,24 @@ def test_write_refuses_overwrite_and_cleans_temporary_file(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_write_record_follows_user_selected_link_and_preserves_exact_keys(tmp_path):
+    target = tmp_path / "target.yap"
+    link = tmp_path / "registry.yap"
+    link.symlink_to(target)
+    data = {"é": 1, "é": 2, "none": None, "items": []}
+    write_record(data, link, overwrite=True)
+    assert link.is_symlink()
+    assert yapyon.loads_record(target.read_text()) == data
+
+
+def test_write_record_keeps_the_existing_eight_mebibyte_limit(tmp_path):
+    path = tmp_path / "registry.yap"
+    data = {"payload": "x" * (4 * 1024 * 1024 + 1)}
+    write_record(data, path)
+    assert path.stat().st_size <= MAX_SOURCE_BYTES
+    assert yapyon.loads_record(path.read_text()) == data
+
+
 def test_failed_serialization_does_not_touch_destination(tmp_path):
     class Refused:
         def to_source(self):
@@ -146,12 +165,11 @@ def test_every_bundled_category_composes_and_persists(kind, name):
     assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
 
 
-def test_unrepresentable_computed_merge_is_not_silently_flattened(tmp_path):
+def test_computed_merge_saves_as_explicit_layers(tmp_path):
     tree = yapyon.merge(
         yapyon.parse('key: "x"\nitems: {y"{key}": 1}'),
         yapyon.parse('items: {y"{key}": 2}'))
-    path = tmp_path / "agent.cfg"
-    path.write_text("keep")
-    with pytest.raises(yapyon.AkanError):
-        write_document(tree, path, overwrite=True)
-    assert path.read_text() == "keep"
+    path = write_document(tree, tmp_path / "agent.cfg")
+    restored = yapyon.parse_file(path)
+    assert "|" in path.read_text()
+    assert restored.resolve() == tree.resolve()

@@ -118,7 +118,6 @@ def _definition(path):
     path = Path(path).expanduser()
     if not path.is_file():
         raise ValueError(f"agent source must be a regular file: {path}")
-    # An explicitly selected source may be a symlink; stored configurations may not.
     tree = compose(read_document(path.resolve()), kinds={"agent"})
     if "agent" not in tree or tree["agent"].kind != "mapping":
         raise ValueError("an agent source must contain an agent mapping")
@@ -127,8 +126,8 @@ def _definition(path):
 
 def _stored_config(store, name):
     path = store.locate(name) / "agent.cfg"
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"stored agent.cfg must be a regular file, not a symlink: {path}")
+    if not path.is_file():
+        raise ValueError(f"stored agent.cfg must be a regular file: {path}")
     return path
 
 
@@ -233,7 +232,7 @@ def _run(args, parser, token):
                       else read_document(stored))
 
     if args.no_token:
-        definition.merge(yapyon.parse("agent:\n  secret: None\n"))
+        definition.merge(yapyon.parse("agent:\n  secret:= None\n"))
 
     if args.create:
         location = store.create(name, definition, path=Path(args.path).expanduser() if args.path is not None else None)

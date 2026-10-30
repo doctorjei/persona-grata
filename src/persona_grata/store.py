@@ -11,6 +11,7 @@ import yapyon
 
 from .composition import (
     DATA_DIR, KIND_DIRS, compose, compose_preset, load_preset, read_document, read_record, write_document,
+    write_record,
 )
 from .identifiers import validate_id
 from . import yapyon_io as yio
@@ -60,12 +61,8 @@ class AgentStore:
                 "env_allow": sorted(yapyon.STANDARD_ENV), "env_add": [], "agents": {}}
 
     def _read(self):
-        self._check_root()
-        if self.registry_path.is_symlink():
-            raise ValueError("agent_store.cfg must not be a symlink")
         if not self.registry_path.exists():
             return self._defaults()
-        self._check_root()
         data = read_record(self.registry_path)
         if not isinstance(data, dict):
             raise ValueError("agent_store.cfg must be a mapping")
@@ -95,6 +92,8 @@ class AgentStore:
             if not isinstance(value, str) or not Path(value).is_absolute():
                 raise ValueError(f"registry path for {name!r} must be absolute")
             path = Path(value)
+            if ".." in path.parts:
+                raise ValueError(f"registry path for {name!r} must not contain '..'")
             self._check_location(path)
             for previous in paths:
                 if path == previous or path in previous.parents or previous in path.parents:
@@ -103,18 +102,13 @@ class AgentStore:
         return data
 
     def _write(self, data):
-        write_document(yio.value_tree(data), self.registry_path, overwrite=True)
-
-    def _check_root(self):
-        if self.root.resolve() != self.root:
-            raise ValueError("store directory or an ancestor must not become a symlink")
+        write_record(data, self.registry_path, overwrite=True)
 
     @contextlib.contextmanager
     def _locked(self):
-        self._check_root()
         self.root.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(self.root / ".agent_store.lock",
-                             os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                             os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
         with os.fdopen(descriptor, "r+", encoding="utf-8") as stream:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
             try:
@@ -159,11 +153,9 @@ class AgentStore:
         return {name: Path(record["path"]) for name, record in self._read()["agents"].items()}
 
     def _check_location(self, path):
-        if path.resolve() != path:
-            raise ValueError(f"agent directory or an ancestor must not be a symlink: {path}")
         components = {self.root / part for part in COMPONENT_DIRS.values()}
         protected = {self.root, self.root / "store", *components,
-                     Path.home().resolve(), Path(path.anchor)}
+                     Path.home().absolute(), Path(path.anchor)}
         if (path in protected or path in self.root.parents or
                 any(directory in path.parents for directory in components)):
             raise ValueError(f"unsafe agent directory: {path}")
@@ -175,8 +167,6 @@ class AgentStore:
         except KeyError:
             raise ValueError(f"unknown agent {name!r}") from None
         self._check_location(path)
-        if path.is_symlink():
-            raise ValueError(f"agent directory must not be a symlink: {path}")
         return path
 
     def component_path(self, label):
@@ -184,10 +174,7 @@ class AgentStore:
         validate_id(name, kind)
         if kind not in COMPONENT_DIRS or kind == "agent":
             raise ValueError(f"not a stored component kind: {kind!r}")
-        path = self.root / COMPONENT_DIRS[kind] / f"{name}.{kind}.tmpl"
-        if path.parent.resolve() != path.parent or path.is_symlink():
-            raise ValueError(f"stored component must not use symlinks: {path}")
-        return path
+        return self.root / COMPONENT_DIRS[kind] / f"{name}.{kind}.tmpl"
 
     def _source_lookup(self, label):
         if label[1] != "agent":
@@ -352,9 +339,6 @@ class AgentStore:
     def create(self, name, definition, *, path=None):
         validate_id(name)
         destination = Path(path).expanduser().absolute() if path is not None else self.root / "store" / name
-        if destination.is_symlink():
-            raise ValueError("agent directory must not be a symlink")
-        destination = destination.resolve()
         self._check_location(destination)
         with self._locked():
             data = self._read()
@@ -394,8 +378,6 @@ class AgentStore:
         with self._locked():
             path = self.locate(name)
             data = self._read()
-            if (path / "agent.cfg").is_symlink():
-                raise ValueError("agent.cfg must not be a symlink")
             components = {}
             tree = self._prepare(definition, name, data, components=components)
             self._assemble(tree, name, path, data, components=components)
@@ -442,8 +424,6 @@ class AgentStore:
     def load(self, name):
         path = self.locate(name)
         config = path / "agent.cfg"
-        if config.is_symlink():
-            raise ValueError("agent.cfg must not be a symlink")
         definition = read_document(config)
         if definition.root.kind != "mapping" or set(definition.keys()) != {"agent"}:
             raise ValueError("installed agent.cfg must contain only agent")

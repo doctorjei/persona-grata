@@ -464,13 +464,13 @@ def test_manager_fetch_cannot_consume_harness_stdin(home, fake_manager, monkeypa
     assert "SECRET" not in result.stderr
 
 
-def test_removal_does_not_normalize_away_symlink_dotdot(store, home):
+def test_removal_rejects_noncanonical_registered_path(store, home):
     path = store.add()
     external = home / "external"
     external.mkdir()
     (store.root / "link").symlink_to(external, target_is_directory=True)
     store.registry["orion"] = store.root / "link" / ".." / "orion"
-    with pytest.raises(ValueError, match="symlink"):
+    with pytest.raises(ValueError, match="must not contain"):
         inst.remove_agent(store, "orion", confirm=True)
     assert path.is_dir()
 
@@ -526,7 +526,7 @@ def test_occupied_native_directory_is_not_overwritten(store, occupied):
         assert next(native.iterdir()).read_text() == "original"
 
 
-def test_private_write_tightens_existing_mode_and_rejects_symlinks(home):
+def test_private_write_tightens_mode_and_follows_user_selected_symlink(home):
     file = home / "private"
     file.write_text("old")
     file.chmod(0o666)
@@ -534,9 +534,9 @@ def test_private_write_tightens_existing_mode_and_rejects_symlinks(home):
     assert stat.S_IMODE(file.stat().st_mode) == 0o600
     link = home / "link"
     link.symlink_to(file)
-    with pytest.raises(ValueError, match="symlink"):
-        inst._write_private(link, "unsafe")
-    assert file.read_text() == "new"
+    inst._write_private(link, "through-link")
+    assert link.is_symlink()
+    assert file.read_text() == "through-link"
 
 
 def test_native_config_cannot_escape_harness_dir(store, home):
@@ -550,14 +550,14 @@ def test_native_config_cannot_escape_harness_dir(store, home):
         inst.install_agent(store, "orion")
 
 
-def test_native_directory_symlink_is_not_followed(store, home):
+def test_native_directory_symlink_receives_installation(store, home):
     path = store.add()
     external = home / "external"
     external.mkdir()
     (path / "harness").symlink_to(external, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        inst.install_agent(store, "orion")
-    assert not list(external.iterdir())
+    inst.install_agent(store, "orion")
+    assert (external / "config.json").is_file()
+    assert (external / inst._OWNER_FILE).is_file()
 
 
 def test_removal_defaults_to_no_and_retains_registration(store):
@@ -617,14 +617,15 @@ def test_removal_refuses_shared_or_overlapping_agent_directories(store):
         inst.remove_agent(store, "orion", confirm=True)
 
 
-def test_removal_does_not_follow_directory_symlinks(store, home):
+def test_removal_unlinks_registered_directory_symlink_only(store, home):
     path = store.add()
     linked = home / "linked"
     linked.symlink_to(path, target_is_directory=True)
     store.registry["orion"] = linked
-    with pytest.raises(ValueError, match="symlink"):
-        inst.remove_agent(store, "orion", confirm=True)
+    assert inst.remove_agent(store, "orion", confirm=True)
+    assert not linked.exists()
     assert path.exists()
+    assert "orion" not in store.registry
 
 
 def test_removal_unlinks_nested_symlink_without_deleting_target(store, home):
@@ -714,6 +715,24 @@ def test_actual_store_keyless_create_install_rename_remove(home, harness):
     assert not path.exists()
     assert store.agents() == {}
     assert (store.root / "personas" / "ollama.persona.tmpl").is_file()
+
+
+def test_actual_store_removal_unlinks_registered_agent_symlink_only(home):
+    import yapyon
+    from persona_grata.store import AgentStore
+
+    store = AgentStore(home / "real-store")
+    definition = yapyon.parse(
+        'agent<base.agent>:\n  persona<ollama.persona>: {}\n'
+        '  harness<claude.harness>: {}\n  secret: None\n')
+    path = store.create("orion", definition)
+    target = home / "preserved-agent"
+    path.rename(target)
+    path.symlink_to(target, target_is_directory=True)
+    assert inst.remove_agent(store, "orion", confirm=True)
+    assert not path.exists()
+    assert target.is_dir()
+    assert store.agents() == {}
 
 
 @pytest.mark.parametrize("backend,store_args,fetch_args", [

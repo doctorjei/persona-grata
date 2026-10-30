@@ -12,5 +12,5 @@ agent<base.agent>:
       dialects:
         anthropic<anthropic.dialect>:
           api_uri: y"{endpoint}/anthropic_api"
-        responses: None
+        responses:= None
   harness<claude.harness>: {}

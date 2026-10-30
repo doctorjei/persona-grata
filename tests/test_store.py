@@ -194,13 +194,36 @@ def test_overlapping_agents_are_refused(store):
         store.create("two", make_agent("minimax", "claude"), path=path / "nested")
 
 
-def test_symlink_agent_directory_refused(store, tmp_path):
+def test_symlinked_agent_directory_loads_and_updates_target(store, tmp_path):
+    path = store.create("one", make_agent("minimax", "claude"))
     target = tmp_path / "target"
-    target.mkdir()
-    link = tmp_path / "linked"
-    link.symlink_to(target, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        store.create("bad", make_agent("minimax", "claude"), path=link)
+    path.rename(target)
+    path.symlink_to(target, target_is_directory=True)
+    store.update("one", make_agent("kimi", "codex"))
+    assert path.is_symlink()
+    assert store.load("one")["agent"]["persona"]["name"] == "kimi"
+    assert yapyon.parse_file(target / "agent.cfg")["agent"]["persona"].label == ("kimi", "persona")
+
+
+def test_symlinked_registry_is_read_and_updated_at_its_target(store, tmp_path):
+    store.create("one", make_agent("minimax", "claude"))
+    target = tmp_path / "registry.yap"
+    store.registry_path.rename(target)
+    store.registry_path.symlink_to(target)
+    store.configure(env_add=["PG_ENDPOINT"])
+    assert store.registry_path.is_symlink()
+    assert yapyon.loads_record(target.read_text())["env_add"] == ["PG_ENDPOINT"]
+
+
+def test_symlinked_component_is_reused(store, tmp_path):
+    store.create("first", make_agent("minimax", "claude"))
+    component = store.root / "personas/minimax.persona.tmpl"
+    target = tmp_path / "minimax.persona.tmpl"
+    component.rename(target)
+    component.symlink_to(target)
+    store.create("second", make_agent("minimax", "claude"))
+    assert component.is_symlink()
+    assert store.load("second")["agent"]["persona"]["name"] == "minimax"
 
 
 def test_load_uses_new_environment_allowlist(store, monkeypatch):
@@ -302,16 +325,19 @@ def test_secret_root_uses_the_same_entry_grammar_as_installer(store, prefix):
         store.configure(secret_root=prefix)
 
 
-def test_symlink_ancestor_never_redirects_update(store, tmp_path):
+def test_symlink_ancestor_redirects_update_to_its_target(store, tmp_path):
     path = store.create("one", make_agent("minimax", "claude"))
+    before = (path / "agent.cfg").read_bytes()
     foreign = tmp_path / "foreign"
     (foreign / "one").mkdir(parents=True)
     (foreign / "one/agent.cfg").write_text("untouched")
     (store.root / "store").rename(store.root / "old-store")
+    old_path = store.root / "old-store" / "one"
     (store.root / "store").symlink_to(foreign, target_is_directory=True)
-    with pytest.raises(ValueError, match="symlink"):
-        store.update("one", make_agent("kimi", "codex"))
-    assert (foreign / "one/agent.cfg").read_text() == "untouched"
+    store.update("one", make_agent("kimi", "codex"))
+    assert store.load("one")["agent"]["persona"]["name"] == "kimi"
+    assert (old_path / "agent.cfg").read_bytes() == before
+    assert (foreign / "one/agent.cfg").read_text() != "untouched"
 
 
 def test_registry_fifo_is_rejected_without_blocking(store):
@@ -336,7 +362,7 @@ def test_installed_config_fifo_is_rejected_without_blocking(store):
 def test_unknown_or_computed_reserved_agent_fields_are_rejected(store):
     path = store.create("one", make_agent("minimax", "claude"))
     config = path / "agent.cfg"
-    config.write_text(config.read_text() + '  field: "path"\n  y"{field}": "/elsewhere"\n')
+    config.write_text(config.read_text() + '  |\n  field: "path"\n  y"{field}": "/elsewhere"\n')
     with pytest.raises(ValueError):
         store.load("one")
 
@@ -346,7 +372,7 @@ def test_disabling_dialects_changes_negotiation(store):
   persona<minimax.persona>:
     mind:
       dialects:
-        responses: None
+        responses:= None
 '''))
     store.create("chat_only", definition)
     resolved = store.load("chat_only")
@@ -394,8 +420,9 @@ def test_registry_failure_rolls_back_new_components(store, monkeypatch):
 
 @pytest.mark.parametrize("supported,protocol", [([], "chat"), (["chat"], "responses")])
 def test_explicit_protocol_cannot_bypass_required_dialect_declarations(store, supported, protocol):
-    definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
-        "agent": {"harness": {"supported_dialects": supported, "protocol": protocol}}}))
+    definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
+        "agent:\n  harness:\n"
+        f"    supported_dialects:= {supported!r}\n    protocol: {protocol!r}\n"))
     with pytest.raises(ValueError, match="dialect"):
         store.create("invalid_protocol", definition)
     assert store.agents() == {}

@@ -165,7 +165,7 @@ Composed components used by agents are stored in `<agent-store>/personas/`, `<ag
 `<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
 copied into the store.
 
-Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.5.3 or newer within the 0.5 series), not YAML:
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.0 or newer within the 0.6 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
 Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
 a whole value without converting it to text. Runtime supplies the agent directory and secret backend;

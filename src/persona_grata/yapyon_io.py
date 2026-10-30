@@ -47,7 +47,8 @@ def load(path):
 
 
 def emit_config(value):
-    return value_tree(value).to_source()
+    """Emit plain native data as a strict yapyon record."""
+    return yapyon.dumps(value)
 
 
 def resolve_document(tree, env_defaults=None, env_allow=None):

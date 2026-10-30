@@ -354,12 +354,6 @@ def setup_store(store, *, backend=None, secret_root=None):
     return store.configure(**changes)
 
 
-def _assert_no_symlink(path):
-    for item in (path, *path.parents):
-        if item.is_symlink():
-            _fail(f"Refusing a symlink path: {item}.")
-
-
 def _absolute(path):
     return Path(os.path.abspath(Path(path).expanduser()))
 
@@ -368,26 +362,22 @@ def _safe_agent_path(store, name):
     registered = store.agents()
     if name not in registered:
         _fail(f"Agent '{name}' is not registered.")
-    located = Path(store.locate(name)).expanduser()
-    # Inspect before abspath can collapse a symlink/.. component away.
-    _assert_no_symlink(located)
-    _assert_no_symlink(Path(registered[name]).expanduser())
-    path = _absolute(located)
+    if ".." in Path(registered[name]).expanduser().parts:
+        _fail("Registered agent path must not contain '..'.")
+    path = _absolute(store.locate(name))
     if path != _absolute(registered[name]):
         _fail("Registered agent path disagrees with the located directory.")
-    _assert_no_symlink(path)
-    resolved = path.resolve()
-    protected = {Path.home().resolve(), Path.cwd().resolve(), Path(store.root).resolve(), Path(resolved.anchor)}
-    if any(resolved == item or resolved in item.parents for item in protected):
+    protected = {Path.home().absolute(), Path.cwd().absolute(), Path(store.root).absolute(), Path(path.anchor)}
+    if any(path == item or path in item.parents for item in protected):
         _fail(f"Refusing unsafe agent directory: {path} (root, home, cwd, store root, or their ancestor).")
     for other_name, other_path in registered.items():
         if other_name == name:
             continue
-        other = _absolute(other_path).resolve()
-        if resolved == other or resolved in other.parents or other in resolved.parents:
+        other = _absolute(other_path)
+        if path == other or path in other.parents or other in path.parents:
             _fail(f"Agent directory overlaps another registered agent ('{other_name}').")
     cfg = path / "agent.cfg"
-    if not path.is_dir() or not cfg.is_file() or cfg.is_symlink():
+    if not path.is_dir() or not cfg.is_file():
         _fail(f"Registered agent directory must contain a regular agent.cfg: {path}.")
     return path
 
@@ -397,7 +387,6 @@ def _native_paths(agent_path, harness):
     expected = agent_path / "harness"
     if config_dir != expected:
         _fail("Harness config directory must be the registered agent's harness/ directory.")
-    _assert_no_symlink(config_dir)
     if config_dir.exists() and not config_dir.is_dir():
         _fail(f"Harness config directory is occupied by a file: {config_dir}.")
     config_file = harness.get("config_file")
@@ -405,7 +394,6 @@ def _native_paths(agent_path, harness):
     if native_file is not None:
         if native_file == config_dir or config_dir not in native_file.parents:
             _fail("Native config file must be inside the agent's harness/ directory.")
-        _assert_no_symlink(native_file)
         for parent in native_file.parents:
             if parent == config_dir:
                 break
@@ -416,7 +404,7 @@ def _native_paths(agent_path, harness):
     owner = config_dir / _OWNER_FILE
     if config_dir.exists() and any(config_dir.iterdir()):
         try:
-            valid = not owner.is_symlink() and json.loads(_read_regular_text(
+            valid = json.loads(_read_regular_text(
                 owner, limit=_OWNER_LIMIT, description="installation ownership marker")) == {"agent_path": str(agent_path)}
         except (OSError, ValueError):
             valid = False
@@ -426,9 +414,8 @@ def _native_paths(agent_path, harness):
 
 
 def _write_private(path, text):
-    """Atomic private replacement; never follow a file or parent symlink."""
-    path = Path(path)
-    _assert_no_symlink(path)
+    """Atomically replace private text, following user-selected links."""
+    path = Path(path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary = tempfile.mkstemp(prefix=".pg-", dir=path.parent)
     try:
@@ -528,7 +515,6 @@ def render_wrapper(name, harness, manager=None, *, agent_path=None):
 def install_shell_wrapper(name, harness, manager=None, *, agent_path=None):
     wrapper = render_wrapper(name, harness, manager, agent_path=agent_path)
     rc_file = _rc_file()
-    _assert_no_symlink(rc_file)
     content = _read_regular_text(rc_file, limit=_RC_LIMIT, description="shell startup file") if rc_file.exists() else ""
     content = _strip_wrapper(content, name, agent_path=agent_path).rstrip()
     _write_private(rc_file, (content + "\n\n" if content else "") + wrapper)
@@ -548,7 +534,6 @@ def remove_shell_wrapper(name, *, agent_path=None):
         rc_file = Path.home() / basename
         if not rc_file.exists():
             continue
-        _assert_no_symlink(rc_file)
         content = _read_regular_text(rc_file, limit=_RC_LIMIT, description="shell startup file")
         after = _strip_wrapper(content, name, agent_path=agent_path)
         if after != content:
@@ -628,7 +613,6 @@ def install_agent(store, name, *, token=None, verify=False, install_wrapper=True
     # Validate the entire wrapper before obtaining or modifying credentials.
     if install_wrapper:
         render_wrapper(name, harness, manager, agent_path=agent_path)
-        _assert_no_symlink(_rc_file())
         if _rc_file().exists():
             _read_regular_text(_rc_file(), limit=_RC_LIMIT, description="shell startup file")
     if manager:
@@ -679,7 +663,10 @@ def remove_agent(store, name, *, confirm=None):
     if _safe_agent_path(store, name) != agent_path:
         _fail("Agent directory changed during removal confirmation.")
     remove_shell_wrapper(name, agent_path=agent_path)
-    shutil.rmtree(agent_path)
+    if agent_path.is_symlink():
+        agent_path.unlink()
+    else:
+        shutil.rmtree(agent_path)
     store.unregister(name)
     print(f"Removed agent '{name}'; password-manager entries were retained.")
     return True

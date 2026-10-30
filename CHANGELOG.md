@@ -24,8 +24,11 @@ All notable changes to this project are documented here. The format follows
 - **Breaking:** credentials are per agent, using the store's `pass`, `gopass`, or `prs` backend.
   `agent.secret: None` is explicitly keyless; a mapping optionally selects an entry. Plaintext token
   backends and `.secret_path` pointers are removed. Removal retains password-manager entries.
-- Require yapyon 0.5.3 or newer within the 0.5 series. Saved unfinished documents retain slots and expressions through
+- Require yapyon 0.6.0 or newer within the 0.6 series. Saved unfinished documents retain slots and expressions through
   `Tree.to_source()`; comments/layout are normalized, and unsafe deferred merges are refused.
+- Require yapyon 0.6's explicit `:=` replacement for inherited dialect disables, keyless CLI
+  overrides, and complete model/capability-list replacement. Regular mappings and initial empty/None
+  defaults retain ordinary composition behavior.
 - Bundled harnesses use yapyon comprehensions for dialect selection and Codex model tables, without
   pg-specific function calls. Native output serializes `config_store` directly, without pruning empty
   or unset values; null handling follows the native serializer.

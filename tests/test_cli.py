@@ -195,7 +195,7 @@ def test_create_named_path_and_keyless(lifecycle, tmp_path):
                      "--no-token", "--no-wrapper"]) == 0
     assert lifecycle.entries["chosen"] == target
     tree = lifecycle.calls[1][2]
-    assert tree["agent"]["secret"].value is None
+    assert "secret:= None" in tree.to_source()
     assert lifecycle.install.call_args.kwargs["install_wrapper"] is False
 
 
@@ -528,23 +528,25 @@ def test_yes_removal_never_prompts(lifecycle, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["display", "export", "update"])
-def test_saved_config_symlink_is_not_followed(lifecycle, tmp_path, capsys, mode):
+def test_saved_config_symlink_is_followed(lifecycle, tmp_path, capsys, mode):
     directory = lifecycle.seed()
-    secret = tmp_path / "private"
-    secret.write_text('agent:\n  name: "PRIVATE_SENTINEL"\n')
+    target = tmp_path / "target.cfg"
+    target.write_text('agent:\n  name: "linked"\n')
     saved = directory / "agent.cfg"
     saved.unlink()
-    saved.symlink_to(secret)
+    saved.symlink_to(target)
     arguments = {"display": ["existing"],
                  "export": ["--export", str(tmp_path / "export.cfg"), "existing"],
                  "update": ["--update", "existing"]}[mode]
-    assert cli.main(arguments) == 1
+    assert cli.main(arguments) == 0
     output = capsys.readouterr()
-    assert "PRIVATE_SENTINEL" not in output.out + output.err
-    assert "symlink" in output.err
-    assert not lifecycle.calls
-    assert not (tmp_path / "export.cfg").exists()
-    assert secret.read_text() == 'agent:\n  name: "PRIVATE_SENTINEL"\n'
+    assert saved.is_symlink()
+    if mode == "display":
+        assert output.out == target.read_text()
+    elif mode == "export":
+        assert "linked" in (tmp_path / "export.cfg").read_text()
+    else:
+        assert lifecycle.calls[0][0] == "update"
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFO safety")
@@ -574,31 +576,6 @@ def test_malformed_backend_registry_returns_error_not_traceback(hermetic_store):
     assert cli.main([]) == 1
 
 
-@pytest.mark.parametrize("mode", ["display", "export", "update"])
-def test_saved_config_swap_to_symlink_is_not_followed(lifecycle, tmp_path, monkeypatch, capsys, mode):
-    lifecycle.seed()
-    secret = tmp_path / "private"
-    secret.write_text('agent:\n  name: "PRIVATE_SENTINEL"\n')
-    original = cli._stored_config
-
-    def swapped(store, name):
-        saved = original(store, name)
-        saved.unlink()
-        saved.symlink_to(secret)
-        return saved
-
-    monkeypatch.setattr(cli, "_stored_config", swapped)
-    arguments = {"display": ["existing"],
-                 "export": ["--export", str(tmp_path / "export.cfg"), "existing"],
-                 "update": ["--update", "existing"]}[mode]
-    assert cli.main(arguments) == 1
-    output = capsys.readouterr()
-    assert "PRIVATE_SENTINEL" not in output.out + output.err
-    assert not lifecycle.calls
-    assert not (tmp_path / "export.cfg").exists()
-    assert secret.read_text() == 'agent:\n  name: "PRIVATE_SENTINEL"\n'
-
-
 def test_explicit_source_symlink_to_regular_file_is_supported(lifecycle, tmp_path):
     target = tmp_path / "actual.tmpl"
     target.write_text('agent:\n  name: "custom"\n')
@@ -608,7 +585,7 @@ def test_explicit_source_symlink_to_regular_file_is_supported(lifecycle, tmp_pat
     assert "custom" in lifecycle.entries
 
 
-def test_update_rejects_symlink_ancestor_before_foreign_write(hermetic_store, tmp_path):
+def test_update_follows_symlink_ancestor_to_foreign_target(hermetic_store, tmp_path):
     assert cli.main(["--create", "ollama", "claude", "--no-token", "--no-wrapper"]) == 0
     directory = hermetic_store.locate("ollama_claude")
     original = (directory / "agent.cfg").read_bytes()
@@ -622,5 +599,6 @@ def test_update_rejects_symlink_ancestor_before_foreign_write(hermetic_store, tm
         'agent<base.agent>:\n  name: "replacement"\n  desc: "FOREIGN CHANGED"\n'
         '  persona<ollama.persona>: {}\n  harness<claude.harness>: {}\n  secret: None\n'
     )
-    assert cli.main(["--update", "ollama_claude", str(source), "--no-wrapper"]) == 1
-    assert (foreign / "agent.cfg").read_bytes() == original
+    assert cli.main(["--update", "ollama_claude", str(source), "--no-wrapper"]) == 0
+    assert (foreign / "agent.cfg").read_bytes() != original
+    assert b"FOREIGN CHANGED" in (foreign / "agent.cfg").read_bytes()

@@ -2,7 +2,7 @@
 
 Persona-Grata composes one agent from a persona, a harness, their dialects, and an optional
 password-manager configuration. Configuration is [yapyon](https://pypi.org/project/yapyon/),
-requiring yapyon 0.5.3 or newer within the 0.5 series; `.cfg` and `.tmpl` describe the same document format.
+requiring yapyon 0.6.0 or newer within the 0.6 series; `.cfg` and `.tmpl` describe the same document format.
 
 ## Agent Store
 
@@ -169,7 +169,7 @@ Optional subagent model ID; defaults to `model_active`, which may be `None`.
 #### `persona.mind.dialects`
 
 Mapping of dialect names to dialect slots. The base supplies `chat`, `responses`, and `anthropic`;
-this is configuration, not server discovery. Set an unsupported dialect to `None`, or override
+this is configuration, not server discovery. Disable an inherited dialect with `:= None`, or override
 its mount point:
 
 ```yapyon
@@ -183,7 +183,7 @@ agent<base.agent>:
       dialects:
         anthropic<anthropic.dialect>:
           api_uri: y"{endpoint}/anthropic"
-        responses: None
+        responses:= None
   harness<claude.harness>: {}
 ```
 

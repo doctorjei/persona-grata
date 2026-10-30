@@ -68,8 +68,9 @@ def test_inline_filter_survives_unfinished_source_roundtrip():
 ])
 def test_stored_model_comprehension_needs_no_contract(tmp_path, monkeypatch, models):
     monkeypatch.setattr(yio, "contract", lambda: None)
-    definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
-        "agent": {"persona": {"mind": {"model_list": models, "model_active": "chosen"}}}}))
+    definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
+        "agent:\n  persona:\n    mind:\n"
+        f"      model_list:= {models!r}\n      model_active: \"chosen\"\n"))
     store = AgentStore(tmp_path / "agents")
     store.create("models", definition)
     source = read_document(store.root / "harnesses/codex.harness.tmpl").to_source()
@@ -84,8 +85,8 @@ def test_stored_model_comprehension_needs_no_contract(tmp_path, monkeypatch, mod
 
 def test_duplicate_model_keys_are_not_silently_overwritten(tmp_path, monkeypatch):
     monkeypatch.setattr(yio, "contract", lambda: None)
-    definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
-        "agent": {"persona": {"mind": {"model_list": ["same", "same"]}}}}))
+    definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
+        'agent:\n  persona:\n    mind:\n      model_list:= ["same", "same"]\n'))
     store = AgentStore(tmp_path / "agents")
     with pytest.raises(yapyon.AkanError):
         store.create("duplicates", definition)

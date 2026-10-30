@@ -68,7 +68,7 @@ replacement component presets.
 ## Protocol Mounts
 
 A persona declares where it serves each dialect; the harness lists which dialects it speaks,
-best first. A shared dialect is required. Disable an unsupported dialect with `None`:
+best first. A shared dialect is required. Disable an inherited dialect with `:= None`:
 
 ```yapyon
 agent<base.agent>:
@@ -87,7 +87,7 @@ agent<base.agent>:
           verify:
             check_uri: y"{api_uri}/verify_me"
             key_header: "x-api-key:"
-        responses: None
+        responses:= None
   harness<claude.harness>: {}
 ```
 

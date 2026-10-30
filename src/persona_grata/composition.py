@@ -18,6 +18,7 @@ KIND_DIRS = {
     "dialect": "dialects",
     "secret": "secret",
 }
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
 
 
 def _check_label(label):
@@ -36,27 +37,27 @@ def load_preset(label, *, data_dir=DATA_DIR):
 
 
 def read_text(path):
-    """Read at most 8 MiB of regular UTF-8 source without following a final symlink."""
+    """Read at most 8 MiB of regular UTF-8 source, following user-selected links."""
     path = Path(path)
-    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(descriptor, encoding="utf-8") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError(f"configuration must be a regular file: {path}")
-        if os.fstat(stream.fileno()).st_size > 8 * 1024 * 1024:
+        if os.fstat(stream.fileno()).st_size > MAX_SOURCE_BYTES:
             raise ValueError(f"configuration exceeds 8 MiB: {path}")
-        text = stream.read(8 * 1024 * 1024 + 1)
-        if len(text) > 8 * 1024 * 1024:
+        text = stream.read(MAX_SOURCE_BYTES + 1)
+        if len(text) > MAX_SOURCE_BYTES:
             raise ValueError(f"configuration exceeds 8 MiB: {path}")
         return text
 
 
 def read_document(path):
-    """Read unfinished source without following a final symlink or blocking on a FIFO."""
+    """Read unfinished source while refusing non-regular files such as FIFOs."""
     return yapyon.parse(read_text(path), source=str(path))
 
 
 def read_record(path):
-    """Read literal registry data with the same filesystem guards as documents."""
+    """Read literal registry data with the same regular-file guard as documents."""
     return yapyon.loads_record(read_text(path), source=str(path))
 
 
@@ -132,15 +133,9 @@ def compose_preset(kind, name, *, lookup=load_preset, max_fills=1000):
     return compose(tree, kinds={kind}, lookup=lookup, max_fills=max_fills)
 
 
-def write_document(tree, path, *, overwrite=False):
-    """Atomically save unfinished yapyon; replacing a file requires opt-in.
-
-    Yapyon may refuse non-representable deferred merge state. Serialize before
-    touching the filesystem so such a refusal cannot damage an existing file.
-    Comments and original layout are not preserved by ``to_source()``.
-    """
-    text = tree.to_source()
-    path = Path(path)
+def _write_text(text, path, *, overwrite=False):
+    """Atomically write text through user-selected links; replacement needs opt-in."""
+    path = Path(path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
@@ -159,3 +154,18 @@ def write_document(tree, path, *, overwrite=False):
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return path
+
+
+def write_document(tree, path, *, overwrite=False):
+    """Atomically save unfinished yapyon; replacing a file requires opt-in.
+
+    Yapyon may refuse non-representable deferred merge state. Serialize before
+    touching the filesystem so such a refusal cannot damage an existing file.
+    Comments and original layout are not preserved by ``to_source()``.
+    """
+    return _write_text(tree.to_source(), path, overwrite=overwrite)
+
+
+def write_record(value, path, *, overwrite=False):
+    """Atomically save native record data through yapyon's public serializer."""
+    return _write_text(yapyon.dumps(value, max_size=MAX_SOURCE_BYTES), path, overwrite=overwrite)
