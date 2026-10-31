@@ -8,7 +8,7 @@ import pytest
 import yapyon
 
 from persona_grata import AgentStore, make_agent
-from persona_grata.composition import DATA_DIR, load_preset
+from persona_grata.composition import DATA_DIR, load_preset, read_document
 from persona_grata.rendering import prune_config
 from persona_grata.store import default_store
 from persona_grata import yapyon_io as yio
@@ -291,11 +291,52 @@ def test_every_supported_pair_renders_without_pg_functions(store, persona, harne
     else:
         assert mind["model_active"] is None
         if harness == "claude":
-            assert native["model"] is None
+            assert "model" not in native
+            assert all(value is not None for value in native["env"].values())
         else:
             assert "model" not in native
             assert native["@_lexemes"]["model"] == "None"
             assert native["models"] == {}
+
+
+def test_claude_optional_defaults_omit_only_generated_none_values(store):
+    definition = yapyon.merge(make_agent("ollama", "claude"), yapyon.parse('''agent:
+  harness:
+    config_store:
+      env: {CUSTOM_NULL: None, CUSTOM_EMPTY: "", CUSTOM_ZERO: 0, CUSTOM_FALSE: False}
+'''))
+    store.create("custom", definition)
+    harness = store.load("custom")["agent"]["harness"]
+    native = json.loads(harness["content"])
+    assert "model" not in native
+    assert {"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION",
+            "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"}.isdisjoint(native["env"])
+    assert native["env"]["CUSTOM_NULL"] is None
+    assert native["env"]["CUSTOM_EMPTY"] == ""
+    assert native["env"]["CUSTOM_ZERO"] == 0
+    assert native["env"]["CUSTOM_FALSE"] is False
+    source = read_document(store.root / "harnesses/claude.harness.tmpl").to_source()
+    assert "for name, value" in source and "if (value is not None)" in source
+    assert yapyon.parse(source).to_source() == source
+
+
+def test_claude_optional_defaults_keep_available_model_values(store):
+    definition = yapyon.merge(make_agent("ollama", "claude"), yapyon.parse('''agent:
+  persona:
+    mind:
+      model_list:= ["m1"]
+'''))
+    store.create("single", definition)
+    native = json.loads(store.load("single")["agent"]["harness"]["content"])
+    assert native["model"] == "m1"
+    assert native["env"]["ANTHROPIC_MODEL"] == "m1"
+    assert native["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "m1"
+    assert native["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "m1"
+    assert {"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW"}.isdisjoint(native["env"])
 
 
 @pytest.mark.parametrize("definition", [

@@ -14,19 +14,27 @@ harness<base.harness>:
   path_var: "CLAUDE_CONFIG_DIR"
   config_file: y"{path}/settings.json"
   config_store:
-    model: (persona.mind.model_active)
     env:
       ANTHROPIC_AUTH_TOKEN: "no-token-required"
       ANTHROPIC_BASE_URL: y"{persona.mind.dialects[protocol].api_uri}"
-      ANTHROPIC_MODEL: (persona.mind.model_active)
-      ANTHROPIC_DEFAULT_FABLE_MODEL: persona.mind.model_list.__get__(0)?.__str__()
-      ANTHROPIC_DEFAULT_OPUS_MODEL: persona.mind.model_list.__get__(1)?.__str__()
-      ANTHROPIC_DEFAULT_SONNET_MODEL: persona.mind.model_list.__get__(2)?.__str__()
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: persona.mind.model_list.__get__(3)?.__str__()
-      ANTHROPIC_CUSTOM_MODEL_OPTION: persona.mind.model_list.__get__(4)?.__str__()
-      CLAUDE_CODE_SUBAGENT_MODEL: (persona.mind.model_subagent)
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1"
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: persona.mind.context_size?.__str__()
+      |
+      name: value
+      for name, value in {
+        ANTHROPIC_MODEL: (persona.mind.model_active),
+        ANTHROPIC_DEFAULT_FABLE_MODEL: persona.mind.model_list.__get__(0)?.__str__(),
+        ANTHROPIC_DEFAULT_OPUS_MODEL: persona.mind.model_list.__get__(1)?.__str__(),
+        ANTHROPIC_DEFAULT_SONNET_MODEL: persona.mind.model_list.__get__(2)?.__str__(),
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: persona.mind.model_list.__get__(3)?.__str__(),
+        ANTHROPIC_CUSTOM_MODEL_OPTION: persona.mind.model_list.__get__(4)?.__str__(),
+        CLAUDE_CODE_SUBAGENT_MODEL: (persona.mind.model_subagent),
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: persona.mind.context_size?.__str__()
+      }
+      if value is not None
+    |
+    name: value
+    for name, value in {model: (persona.mind.model_active)}
+    if value is not None
 
   content: y"{config_store.__as_json__()}"
 
