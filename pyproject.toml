@@ -39,7 +39,7 @@ pg = "persona_grata:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-persona_grata = ["data/*.tmpl", "data/*/*.tmpl", "data/functions.contract"]
+persona_grata = ["data/*.tmpl", "data/*/*.tmpl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

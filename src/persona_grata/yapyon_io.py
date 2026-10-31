@@ -1,8 +1,6 @@
 """Public yapyon APIs used by pg's composition and final evaluation stages."""
 
-import functools
 import os
-from pathlib import Path
 
 import yapyon
 
@@ -14,13 +12,6 @@ RESERVED_ENV = frozenset({"HOME", "XDG_CONFIG_HOME", "AGENT_STORE_DIR"})
 
 def environment(env_defaults=None):
     return {**(env_defaults or {}), **os.environ}
-
-
-@functools.lru_cache(maxsize=None)
-def contract():
-    path = Path(__file__).parent / "data" / "functions.contract"
-    with path.open(encoding="utf-8") as stream:
-        return yapyon.load_contract(stream, source=str(path))
 
 
 def value_tree(value):
@@ -54,5 +45,4 @@ def emit_config(value):
 def resolve_document(tree, env_defaults=None, env_allow=None):
     if env_allow is None:
         env_allow = RESERVED_ENV | yapyon.STANDARD_ENV
-    return tree.resolve(contract=contract(), env_allow=env_allow,
-                        env=environment(env_defaults))
+    return tree.resolve(env_allow=env_allow, env=environment(env_defaults))

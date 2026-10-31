@@ -59,7 +59,7 @@ jobs:
       - name: Verify presets ship in the wheel
         run: |
           python -m zipfile -l dist/*.whl > wheel.txt
-          for f in global.tmpl functions.contract agents/base.agent.tmpl \
+          for f in global.tmpl agents/base.agent.tmpl \
                    agents/minimax_claude.agent.tmpl personas/base.persona.tmpl \
                    personas/kimi.persona.tmpl harnesses/claude.harness.tmpl \
                    harnesses/codex.harness.tmpl dialects/chat.dialect.tmpl \

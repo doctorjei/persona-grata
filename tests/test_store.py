@@ -9,7 +9,6 @@ import yapyon
 
 from persona_grata import AgentStore, make_agent
 from persona_grata.composition import DATA_DIR, load_preset, read_document
-from persona_grata.rendering import prune_config
 from persona_grata.store import default_store
 from persona_grata import yapyon_io as yio
 
@@ -250,33 +249,11 @@ def test_invalid_settings_are_not_written(store, changes):
     assert not store.registry_path.exists()
 
 
-def test_pruning_keeps_zero_false_and_does_not_mutate_input():
-    source = {"none": None, "empty": "", "list": [None, 0, False, ""],
-              "dict": {"gone": None, "keep": False}, "zero": 0, "false": False}
-    assert prune_config(source) == {"list": [0, False], "dict": {"keep": False}, "zero": 0, "false": False}
-    assert source["list"] == [None, 0, False, ""]
-
-
-def test_pruning_through_contract_before_native_serialization():
-    result = yio.resolve_document(yapyon.parse('''config:
-  omitted: None
-  false: False
-  zero: 0
-  nested: {empty: "", keep: "yes"}
-  items: [None, False, 0]
-content: y"{PRUNE_CONFIG(config).__as_json__()}"
-'''))
-    assert json.loads(result["content"]) == {
-        "false": False, "zero": 0, "nested": {"keep": "yes"}, "items": [False, 0]}
-    assert result["config"]["omitted"] is None
-
-
 @pytest.mark.parametrize("persona", [path.name.removesuffix(".persona.tmpl")
                                     for path in sorted((DATA_DIR / "personas").glob("*.persona.tmpl"))
                                     if not path.name.startswith("base.")])
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_every_supported_pair_renders_without_pg_functions(store, persona, harness, monkeypatch):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_every_supported_pair_renders_without_pg_functions(store, persona, harness):
     name = f"{persona}_{harness}"
     store.create(name, make_agent(persona, harness))
     resolved = store.load(name)

@@ -54,6 +54,16 @@ def test_inline_first_index_does_not_hide_later_errors():
         protocol_tree(["chat", 123], {"chat": {}}).resolve()
 
 
+@pytest.mark.parametrize("call", [
+    'MATCH_FIRST(["chat"], {chat: {}})',
+    'GEN_CODEX_MODEL_TABLE("provider", [])',
+    'PRUNE_CONFIG({})',
+])
+def test_retired_pg_contract_calls_are_rejected(call):
+    with pytest.raises(yapyon.AkanError):
+        yio.resolve_document(yapyon.parse(f"value: {call}\n"))
+
+
 def test_inline_filter_survives_unfinished_source_roundtrip():
     tree = protocol_tree(["responses", "chat"], {"responses": None, "chat": {}})
     tree.merge(yapyon.parse("runtime<>: {}"))
@@ -66,8 +76,7 @@ def test_inline_filter_survives_unfinished_source_roundtrip():
 @pytest.mark.parametrize("models", [
     [], ["m1"], ["M1", "m1", "m/2", 'm"3', "é", "é"],
 ])
-def test_stored_model_comprehension_needs_no_contract(tmp_path, monkeypatch, models):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_stored_model_comprehension_needs_no_contract(tmp_path, models):
     definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
         "agent:\n  persona:\n    mind:\n"
         f"      model_list:= {models!r}\n      model_active: \"chosen\"\n"))
@@ -83,8 +92,7 @@ def test_stored_model_comprehension_needs_no_contract(tmp_path, monkeypatch, mod
         model: {"provider": "minimax", "remote_model_id": model} for model in models}
 
 
-def test_duplicate_model_keys_are_not_silently_overwritten(tmp_path, monkeypatch):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_duplicate_model_keys_are_not_silently_overwritten(tmp_path):
     definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
         'agent:\n  persona:\n    mind:\n      model_list:= ["same", "same"]\n'))
     store = AgentStore(tmp_path / "agents")
@@ -94,8 +102,7 @@ def test_duplicate_model_keys_are_not_silently_overwritten(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_native_serialization_keeps_declared_empty_false_and_zero_values(tmp_path, monkeypatch, harness):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_native_serialization_keeps_declared_empty_false_and_zero_values(tmp_path, harness):
     payload = {
         "empty_string": "", "empty_list": [], "empty_mapping": {}, "zero": 0, "flag": False,
         "values": ["", {}, [], 0, False],
@@ -110,8 +117,7 @@ def test_native_serialization_keeps_declared_empty_false_and_zero_values(tmp_pat
     assert result["config_store"]["payload"] == payload
 
 
-def test_json_native_serialization_preserves_null_and_list_positions(tmp_path, monkeypatch):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_json_native_serialization_preserves_null_and_list_positions(tmp_path):
     payload = {"explicit_null": None, "positions": [None, "", {}, [], 0, False]}
     definition = yapyon.merge(make_agent("minimax", "claude"), yio.value_tree({
         "agent": {"harness": {"config_store": {"payload": payload}}}}))
@@ -122,8 +128,7 @@ def test_json_native_serialization_preserves_null_and_list_positions(tmp_path, m
     assert harness["config_store"]["payload"] == payload
 
 
-def test_toml_null_behavior_is_upstreams_not_pg_cleanup(tmp_path, monkeypatch):
-    monkeypatch.setattr(yio, "contract", lambda: None)
+def test_toml_null_behavior_is_upstreams_not_pg_cleanup(tmp_path):
     definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
         "agent": {"harness": {"config_store": {"payload": {"explicit_null": None, "blank": ""}}}}}))
     store = AgentStore(tmp_path / "agents")
