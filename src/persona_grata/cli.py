@@ -235,17 +235,20 @@ def _run(args, parser, token):
         definition.merge(yapyon.parse("agent:\n  secret:= None\n"))
 
     if args.create:
-        location = store.create(name, definition, path=Path(args.path).expanduser() if args.path is not None else None)
+        candidate = store.prepare_create(name, definition,
+                                         path=Path(args.path).expanduser() if args.path is not None else None)
     else:
-        location = store.update(name, definition)
-        if args.name is not None and args.name != name:
-            store.rename(name, args.name)
-            name = args.name
+        candidate = store.prepare_update(name, definition, new_name=args.name)
 
-    from .installation import install_agent
+    from .installation import apply_installation, commit_credential, prepare_installation
 
+    installation = prepare_installation(candidate.resolved, token=token, verify=args.verify,
+                                        install_wrapper=not args.no_wrapper)
+    commit_credential(installation)
+    location = store.commit(candidate)
+    name = candidate.name
     try:
-        install_agent(store, name, token=token, verify=args.verify, install_wrapper=not args.no_wrapper)
+        apply_installation(installation)
     except (OSError, UnicodeError, ValueError, yapyon.AkanError, yapyon.Yakamashiwa) as error:
         raise ValueError(
             f"Agent {name!r} configuration was saved at {location}, but installation failed: "

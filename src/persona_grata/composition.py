@@ -133,6 +133,21 @@ def compose_preset(kind, name, *, lookup=load_preset, max_fills=1000):
     return compose(tree, kinds={kind}, lookup=lookup, max_fills=max_fills)
 
 
+def check_write_path(path):
+    """Check an atomic-write target without creating files or directories."""
+    path = Path(path).resolve()
+    if path.exists() and not path.is_file():
+        raise ValueError(f"configuration target must be a regular file: {path}")
+    parent = path.parent
+    while not parent.exists():
+        parent = parent.parent
+    if not parent.is_dir():
+        raise ValueError(f"configuration parent must be a directory: {parent}")
+    if not os.access(parent, os.W_OK | os.X_OK):
+        raise ValueError(f"configuration directory is not writable: {parent}")
+    return path
+
+
 def _write_text(text, path, *, overwrite=False):
     """Atomically write text through user-selected links; replacement needs opt-in."""
     path = Path(path).resolve()

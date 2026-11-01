@@ -15,7 +15,7 @@ from persona_grata import cli
 
 @pytest.fixture
 def lifecycle(monkeypatch, tmp_path):
-    state = SimpleNamespace(root=tmp_path / "store", entries={}, calls=[], constructed=[])
+    state = SimpleNamespace(root=tmp_path / "store", entries={}, calls=[], constructed=[], prepared=[])
 
     def normalized(definition, name):
         tree = yapyon.merge(definition)
@@ -63,8 +63,35 @@ def lifecycle(monkeypatch, tmp_path):
             (directory / "agent.cfg").write_text(tree.to_source())
             state.calls.append(("rename", old, new))
 
+        def prepare_create(self, name, definition, *, path=None):
+            if name in state.entries:
+                raise ValueError(f"agent {name!r} already exists")
+            directory = Path(path) if path is not None else self.root / name
+            candidate = SimpleNamespace(name=name, path=directory, definition=normalized(definition, name),
+                                        previous_name=None,
+                                        resolved={"agent": {"name": name}, "runtime": {"agent_path": str(directory)}})
+            state.prepared.append(candidate)
+            return candidate
+
+        def prepare_update(self, name, definition, *, new_name=None):
+            directory = self.locate(name)
+            selected = new_name or name
+            candidate = SimpleNamespace(name=selected, path=directory, definition=normalized(definition, selected),
+                                        previous_name=name,
+                                        resolved={"agent": {"name": selected}, "runtime": {"agent_path": str(directory)}})
+            state.prepared.append(candidate)
+            return candidate
+
+        def commit(self, candidate):
+            if candidate.previous_name is None:
+                return self.create(candidate.name, candidate.definition, path=candidate.path)
+            path = self.update(candidate.previous_name, candidate.definition)
+            if candidate.name != candidate.previous_name:
+                self.rename(candidate.previous_name, candidate.name)
+            return path
+
         def load(self, name):
-            pytest.fail("CLI must not resolve the stored agent")
+            pytest.fail("CLI must use its prepared candidate instead of reloading it")
 
     def make_agent(persona, harness, *, name=None):
         state.calls.append(("make", persona, harness, name))
@@ -76,13 +103,18 @@ def lifecycle(monkeypatch, tmp_path):
         )
 
     state.install = Mock()
+    state.preflight = Mock(side_effect=lambda resolved, **kwargs: SimpleNamespace(
+        name=resolved["agent"]["name"], resolved=resolved, **kwargs))
+    state.credentials = Mock()
     state.remove = Mock()
     state.setup = Mock()
     store_module = ModuleType("persona_grata.store")
     store_module.AgentStore = Store
     store_module.make_agent = make_agent
     installation = ModuleType("persona_grata.installation")
-    installation.install_agent = state.install
+    installation.prepare_installation = state.preflight
+    installation.commit_credential = state.credentials
+    installation.apply_installation = state.install
     installation.remove_agent = state.remove
     installation.setup_store = state.setup
     monkeypatch.setitem(sys.modules, "persona_grata.store", store_module)
@@ -184,8 +216,9 @@ def test_create_pair_defaults_and_no_paid_verification(lifecycle, capsys):
     assert lifecycle.calls[0] == ("make", "local", "shell", "local_shell")
     assert lifecycle.calls[1][:2] == ("create", "local_shell")
     lifecycle.install.assert_called_once()
-    assert lifecycle.install.call_args.args[1] == "local_shell"
-    assert lifecycle.install.call_args.kwargs == {"token": None, "verify": False, "install_wrapper": True}
+    assert lifecycle.install.call_args.args[0].name == "local_shell"
+    assert lifecycle.preflight.call_args.kwargs == {"token": None, "verify": False, "install_wrapper": True}
+    lifecycle.credentials.assert_called_once_with(lifecycle.install.call_args.args[0])
     assert "Created agent 'local_shell'" in capsys.readouterr().out
 
 
@@ -196,7 +229,7 @@ def test_create_named_path_and_keyless(lifecycle, tmp_path):
     assert lifecycle.entries["chosen"] == target
     tree = lifecycle.calls[1][2]
     assert "secret:= None" in tree.to_source()
-    assert lifecycle.install.call_args.kwargs["install_wrapper"] is False
+    assert lifecycle.preflight.call_args.kwargs["install_wrapper"] is False
 
 
 def test_store_flag_overrides_environment(lifecycle, monkeypatch, tmp_path):
@@ -268,7 +301,7 @@ def test_update_saved_definition_and_rename_preserve_directory(lifecycle):
     tree = yapyon.parse_file(path / "agent.cfg")
     assert tree["agent"]["name"].value == "renamed"
     assert tree["agent"]["secret"].value is None
-    assert lifecycle.install.call_args.args[1] == "renamed"
+    assert lifecycle.install.call_args.args[0].name == "renamed"
 
 
 def test_update_source_uses_existing_registry_name(lifecycle, tmp_path):
@@ -297,7 +330,7 @@ def test_token_preflight_forwarded_without_printing(lifecycle, tmp_path, capsys)
     source = tmp_path / "key"
     source.write_text(f"  {token}\n")
     assert cli.main(["--create", "local", "shell", "--token", str(source), "--verify"]) == 0
-    kwargs = lifecycle.install.call_args.kwargs
+    kwargs = lifecycle.preflight.call_args.kwargs
     assert kwargs["token"] == token
     assert kwargs["verify"] is True
     output = capsys.readouterr()

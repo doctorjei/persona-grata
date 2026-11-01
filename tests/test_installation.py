@@ -113,6 +113,8 @@ def fake_manager(home, monkeypatch):
         "name": "test-manager", "entry": entry, "probe": str(manager),
         "fetch": f"{manager} fetch {entry}", "store": f"{manager} store {entry}",
     }
+    monkeypatch.setattr(inst, "_check_secret_store", lambda *a, **k:
+                        (data / "value").exists() or (data / "fail").exists())
     return resolved, data
 
 
@@ -176,7 +178,7 @@ def test_missing_entry_without_tty_fails_before_install(store, fake_manager, hom
     path = store.add(manager=manager, keyless=False)
     with pytest.raises(ValueError, match="supply a token|terminal"):
         inst.install_agent(store, "orion")
-    assert calls(data) == [["fetch", manager["entry"]]]
+    assert calls(data) == []
     assert not (path / "harness").exists()
     assert not (home / ".bashrc").exists()
 

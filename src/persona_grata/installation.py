@@ -7,6 +7,7 @@ launch; a failed or empty fetch prevents the harness from starting.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import getpass
 import hashlib
 import json
@@ -21,6 +22,8 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+
+from .composition import check_write_path
 
 
 _SECRET_TIMEOUT = 120
@@ -147,6 +150,12 @@ def _secret_probe(manager):
     probe = manager.get("probe") or _command_argv(manager, "fetch")[0]
     if not isinstance(probe, str) or not probe or shutil.which(probe) is None:
         _fail(f"Secret backend '{manager.get('name', 'custom')}' is not installed (no '{probe}' on PATH).")
+
+
+def _check_secret_store(manager, *, writing=False):
+    from .secret_preflight import check_store
+
+    return check_store(manager, writing=writing)
 
 
 def _fetch_secret(manager, *, missing_ok=False):
@@ -518,13 +527,17 @@ def install_shell_wrapper(name, harness, manager=None, *, agent_path=None):
     content = _read_regular_text(rc_file, limit=_RC_LIMIT, description="shell startup file") if rc_file.exists() else ""
     content = _strip_wrapper(content, name, agent_path=agent_path).rstrip()
     _write_private(rc_file, (content + "\n\n" if content else "") + wrapper)
+    _report_shell_wrapper(name, rc_file)
+    return rc_file
+
+
+def _report_shell_wrapper(name, rc_file):
     shell = os.environ.get("SHELL", "")
     if shell and os.path.basename(shell) not in _KNOWN_SHELLS:
         print(f"Warning: $SHELL is {shell}; its startup conventions are unknown. POSIX wrapper written to {rc_file}.")
     elif rc_file.name == ".profile":
         print("Note: .profile is read by login shells; non-login ash/dash need ENV to source it.")
     print(f"Installed {name}; open a new terminal or source {rc_file}.")
-    return rc_file
 
 
 def remove_shell_wrapper(name, *, agent_path=None):
@@ -585,59 +598,118 @@ def _verify_token(agent, token):
         print(f"Warning: verification returned HTTP {code}; skipping credential check.", file=sys.stderr)
 
 
-def install_agent(store, name, *, token=None, verify=False, install_wrapper=True):
-    """Render one registered agent and install its command.
+@dataclass(frozen=True)
+class _Installation:
+    name: str
+    agent_path: Path
+    harness: dict = field(repr=False)
+    config_dir: Path
+    native_file: Path | None
+    content: str | None = field(repr=False)
+    manager: dict | None = field(repr=False)
+    token: str | None = field(repr=False)
+    fresh: bool
+    shell_file: Path | None
+    shell_before: str | None = field(repr=False)
+    shell_content: str | None = field(repr=False)
 
-    ``token`` is the credential value, not a filename (use :func:`read_token`).
-    Existing manager entries are reused. Missing entries require an explicit
-    token or an interactive hidden prompt. Manager entries are never deleted.
-    """
-    agent_path = _safe_agent_path(store, name)
-    resolved = store.load(name)
-    if _absolute(resolved["runtime"]["agent_path"]) != agent_path:
-        _fail("Resolved runtime agent path disagrees with the registry.")
+
+def prepare_installation(resolved, *, name=None, token=None, verify=False, install_wrapper=True):
+    """Validate installation and obtain its credential without persisting anything."""
+    agent_path = _absolute(resolved["runtime"]["agent_path"])
+    protected = {Path.home().absolute(), Path.cwd().absolute(), Path(agent_path.anchor)}
+    if any(agent_path == path or agent_path in path.parents for path in protected):
+        _fail(f"Refusing unsafe agent directory: {agent_path}.")
     agent = resolved["agent"]
+    name = agent["name"] if name is None else name
     harness = agent["harness"]
     config_dir, native_file = _native_paths(agent_path, harness)
     content = harness.get("content")
     if native_file is not None and not isinstance(content, str):
         _fail("Native harness content must be rendered text.")
-    secret = agent.get("secret")
     manager = resolved["runtime"].get("secret_backend") or None
-    if secret is None:
+    if agent.get("secret") is None:
         if token is not None:
             _fail("This agent is keyless; there is nowhere to store the supplied token.")
         manager = None
     elif not manager:
         _fail("Agent requests a credential but no secret backend is configured; run store setup first.")
-    # Validate the entire wrapper before obtaining or modifying credentials.
+    for target in (config_dir / _OWNER_FILE, *((native_file,) if native_file is not None else ())):
+        check_write_path(target)
+    shell_file = shell_before = shell_content = None
     if install_wrapper:
-        render_wrapper(name, harness, manager, agent_path=agent_path)
-        if _rc_file().exists():
-            _read_regular_text(_rc_file(), limit=_RC_LIMIT, description="shell startup file")
+        wrapper = render_wrapper(name, harness, manager, agent_path=agent_path)
+        shell_file = _rc_file()
+        check_write_path(shell_file)
+        shell_before = (_read_regular_text(shell_file, limit=_RC_LIMIT, description="shell startup file")
+                        if shell_file.exists() else "")
+        existing = _strip_wrapper(shell_before, name, agent_path=agent_path).rstrip()
+        shell_content = (existing + "\n\n" if existing else "") + wrapper
+    key, fresh = None, False
     if manager:
         _secret_probe(manager)
-        _command_argv(manager, "store")
-        key = _validate_token(token) if token is not None else _fetch_secret(manager, missing_ok=True)
+        for action in ("fetch", "store"):
+            argv = _command_argv(manager, action)
+            if shutil.which(argv[0]) is None:
+                _fail(f"Secret backend cannot run its {action} command (executable missing).")
+        exists = _check_secret_store(manager, writing=token is not None)
+        if token is not None:
+            key = _validate_token(token)
+        else:
+            key = None if exists is False else _fetch_secret(manager)
         fresh = token is not None or key is None
         if key is None:
             key = _prompt_token(agent.get("desc") or name)
+            _check_secret_store(manager, writing=True)
         if verify:
             _verify_token(agent, key)
-        if fresh:
-            _store_secret(manager, key)
-            # Fail if the manager accepted a write but cannot subsequently read it.
-            if _fetch_secret(manager) != key:
-                _fail("Secret backend did not return the credential it just stored.")
-    else:
-        print(f"Agent '{name}' is keyless; no credentials configured.")
-    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if native_file is not None:
-        _write_private(native_file, content)
-    _write_private(config_dir / _OWNER_FILE, json.dumps({"agent_path": str(agent_path)}) + "\n")
-    if install_wrapper:
-        install_shell_wrapper(name, harness, manager, agent_path=agent_path)
-    return agent_path
+    return _Installation(name, agent_path, harness, config_dir, native_file, content,
+                         manager, key, fresh, shell_file, shell_before, shell_content)
+
+
+def _check_installation(plan):
+    if _native_paths(plan.agent_path, plan.harness) != (plan.config_dir, plan.native_file):
+        _fail("Installation paths changed during preflight; retry the operation.")
+    if plan.shell_file is not None:
+        current = (_read_regular_text(plan.shell_file, limit=_RC_LIMIT, description="shell startup file")
+                   if plan.shell_file.exists() else "")
+        if current != plan.shell_before:
+            _fail("Shell startup file changed during preflight; retry the operation.")
+
+
+def commit_credential(plan):
+    """Import and read back a prepared credential before committing pg state."""
+    _check_installation(plan)
+    if plan.manager and plan.fresh:
+        _store_secret(plan.manager, plan.token)
+        if _fetch_secret(plan.manager) != plan.token:
+            _fail("Secret backend did not return the credential it just stored.")
+
+
+def apply_installation(plan):
+    """Write only the native settings and wrapper validated during preparation."""
+    _check_installation(plan)
+    plan.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if plan.native_file is not None:
+        _write_private(plan.native_file, plan.content)
+    _write_private(plan.config_dir / _OWNER_FILE, json.dumps({"agent_path": str(plan.agent_path)}) + "\n")
+    if plan.shell_file is not None:
+        _write_private(plan.shell_file, plan.shell_content)
+        _report_shell_wrapper(plan.name, plan.shell_file)
+    if plan.manager is None:
+        print(f"Agent '{plan.name}' is keyless; no credentials configured.")
+    return plan.agent_path
+
+
+def install_agent(store, name, *, token=None, verify=False, install_wrapper=True):
+    """Prepare and install an already registered source definition."""
+    agent_path = _safe_agent_path(store, name)
+    resolved = store.load(name)
+    if _absolute(resolved["runtime"]["agent_path"]) != agent_path:
+        _fail("Resolved runtime agent path disagrees with the registry.")
+    plan = prepare_installation(resolved, name=name, token=token, verify=verify, install_wrapper=install_wrapper)
+    commit_credential(plan)
+    return apply_installation(plan)
 
 
 def remove_agent(store, name, *, confirm=None):

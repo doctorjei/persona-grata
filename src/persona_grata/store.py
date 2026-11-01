@@ -2,6 +2,7 @@
 
 import contextlib
 import copy
+from dataclasses import dataclass, field
 import fcntl
 import json
 import os
@@ -10,8 +11,8 @@ from pathlib import Path
 import yapyon
 
 from .composition import (
-    DATA_DIR, KIND_DIRS, compose, compose_preset, load_preset, read_document, read_record, write_document,
-    write_record,
+    DATA_DIR, KIND_DIRS, MAX_SOURCE_BYTES, _write_text, check_write_path, compose, compose_preset,
+    load_preset, read_document, read_record, read_text, write_document, write_record,
 )
 from .identifiers import validate_id
 from . import yapyon_io as yio
@@ -48,6 +49,19 @@ def _entry(value, *, allow_empty=False):
                   any(ch in value for ch in "\x00\r\n")):
         raise ValueError("a secret entry must be store-relative without dot segments or control characters")
     return value
+
+
+@dataclass(frozen=True)
+class _PreparedAgent:
+    root: Path
+    name: str
+    path: Path
+    definition: object = field(repr=False)
+    resolved: dict = field(repr=False)
+    components: dict = field(repr=False)
+    registry: dict = field(repr=False)
+    previous_name: str | None = None
+    previous_source: str | None = field(default=None, repr=False)
 
 
 class AgentStore:
@@ -336,59 +350,111 @@ class AgentStore:
             _entry(result["runtime"]["secret_backend"]["entry"])
         return result
 
-    def create(self, name, definition, *, path=None):
+    def _check_new_agent(self, name, destination, data):
+        if ".." in destination.parts:
+            raise ValueError("agent directory must not contain '..'")
+        self._check_location(destination)
+        if name in data["agents"]:
+            raise FileExistsError(f"agent name {name!r} is already occupied")
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(f"agent directory already exists: {destination}")
+        for record in data["agents"].values():
+            previous = Path(record["path"])
+            if destination in previous.parents or previous in destination.parents:
+                raise ValueError("registered agent directories cannot overlap")
+
+    def _candidate(self, name, definition, path, data, *, previous_name=None, previous_source=None):
+        components = {}
+        tree = self._prepare(definition, name, data, components=components)
+        resolved = self._assemble(tree, name, path, data, components=components)
+        proposed = copy.deepcopy(data)
+        if previous_name is not None:
+            del proposed["agents"][previous_name]
+        proposed["agents"][name] = {"path": str(path)}
+        yapyon.dumps(proposed, max_size=MAX_SOURCE_BYTES)
+        targets = [path / "agent.cfg", *(self.component_path(label) for label in components)]
+        if previous_name != name:
+            targets.append(self.registry_path)
+        for target in targets:
+            check_write_path(target)
+        return _PreparedAgent(self.root, name, path, tree, resolved, components, data,
+                              previous_name, previous_source)
+
+    def prepare_create(self, name, definition, *, path=None):
+        """Resolve a prospective agent without creating its store or files."""
         validate_id(name)
         destination = Path(path).expanduser().absolute() if path is not None else self.root / "store" / name
-        self._check_location(destination)
+        data = self._read()
+        self._check_new_agent(name, destination, data)
+        return self._candidate(name, definition, destination, data)
+
+    def prepare_update(self, name, definition, *, new_name=None):
+        """Resolve a replacement and optional rename without changing saved state."""
+        validate_id(name)
+        selected = validate_id(new_name) if new_name is not None else name
+        data = self._read()
+        if name not in data["agents"]:
+            raise ValueError(f"unknown agent {name!r}")
+        if selected != name and selected in data["agents"]:
+            raise ValueError(f"agent name {selected!r} is already occupied")
+        path = Path(data["agents"][name]["path"])
+        previous = read_text(path / "agent.cfg")
+        return self._candidate(selected, definition, path, data,
+                               previous_name=name, previous_source=previous)
+
+    def commit(self, prepared):
+        """Persist a prepared source definition, refusing stale preflight state."""
+        if not isinstance(prepared, _PreparedAgent) or prepared.root != self.root:
+            raise ValueError("prepared agent belongs to a different store")
+        path = prepared.path
         with self._locked():
             data = self._read()
-            if name in data["agents"]:
-                raise FileExistsError(f"agent name {name!r} is already occupied")
-            if destination.exists():
-                raise FileExistsError(f"agent directory already exists: {destination}")
-            for record in data["agents"].values():
-                previous = Path(record["path"])
-                if destination in previous.parents or previous in destination.parents:
-                    raise ValueError("registered agent directories cannot overlap")
-            components = {}
-            tree = self._prepare(definition, name, data, components=components)
-            self._assemble(tree, name, destination, data, components=components)
-            destination.mkdir(parents=True)
+            if data != prepared.registry:
+                raise ValueError("agent store changed during preflight; retry the operation")
+            updating = prepared.previous_name is not None
+            if updating:
+                if read_text(path / "agent.cfg") != prepared.previous_source:
+                    raise ValueError("agent source changed during preflight; retry the operation")
+            else:
+                self._check_new_agent(prepared.name, path, data)
+            resolved = self._assemble(prepared.definition, prepared.name, path, data,
+                                      components=prepared.components)
+            if resolved != prepared.resolved:
+                raise ValueError("agent configuration changed during preflight; retry the operation")
+            if not updating:
+                path.mkdir(parents=True)
             written = []
-            created_config = False
+            saved = False
             try:
-                written = self._save_components(components)
-                write_document(tree, destination / "agent.cfg")
-                created_config = True
-                data["agents"][name] = {"path": str(destination)}
-                self._write(data)
+                written = self._save_components(prepared.components)
+                write_document(prepared.definition, path / "agent.cfg", overwrite=updating)
+                saved = True
+                if prepared.previous_name != prepared.name:
+                    if updating:
+                        del data["agents"][prepared.previous_name]
+                    data["agents"][prepared.name] = {"path": str(path)}
+                    self._write(data)
             except BaseException:
-                if created_config:
-                    (destination / "agent.cfg").unlink(missing_ok=True)
+                if saved:
+                    if updating:
+                        _write_text(prepared.previous_source, path / "agent.cfg", overwrite=True)
+                    else:
+                        (path / "agent.cfg").unlink(missing_ok=True)
                 for component in written:
                     component.unlink(missing_ok=True)
-                try:
-                    destination.rmdir()
-                except OSError:
-                    pass
+                if not updating:
+                    try:
+                        path.rmdir()
+                    except OSError:
+                        pass
                 raise
-        return destination
+        return path
+
+    def create(self, name, definition, *, path=None):
+        return self.commit(self.prepare_create(name, definition, path=path))
 
     def update(self, name, definition):
-        with self._locked():
-            path = self.locate(name)
-            data = self._read()
-            components = {}
-            tree = self._prepare(definition, name, data, components=components)
-            self._assemble(tree, name, path, data, components=components)
-            written = self._save_components(components)
-            try:
-                write_document(tree, path / "agent.cfg", overwrite=True)
-            except BaseException:
-                for component in written:
-                    component.unlink(missing_ok=True)
-                raise
-            return path
+        return self.commit(self.prepare_update(name, definition))
 
     def rename(self, old, new):
         validate_id(new)
