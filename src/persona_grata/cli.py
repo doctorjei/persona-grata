@@ -15,7 +15,7 @@ def _parser():
 
     parser = argparse.ArgumentParser(
         prog="persona-grata",
-        description="Create, update, install, export, or remove one named agent.",
+        description="Manage named agents and retrieve their credentials.",
         epilog=("No arguments lists registered agents. A name alone shows its saved "
                 "configuration without resolving it. Custom variants are .cfg/.tmpl "
                 "documents, not command-line definitions."),
@@ -28,6 +28,7 @@ def _parser():
     modes.add_argument("-r", "--remove", action="store_true", help="remove NAME after confirmation; keep manager credentials")
     modes.add_argument("--export", metavar="FILE", help="export NAME's saved partial configuration only")
     modes.add_argument("--setup", action="store_true", help="configure the agent store and password manager")
+    modes.add_argument("--get-secret", metavar="NAME", help="print NAME's credential to stdout (sensitive; read-only)")
     parser.add_argument("--name", metavar="NAME", help="elect a create name, or rename an agent with --update")
     parser.add_argument("--path", metavar="DIR", help="explicit agent directory on --create only")
     parser.add_argument("--store", metavar="DIR", help="store root (otherwise AGENT_STORE_DIR or XDG config agents)")
@@ -66,7 +67,10 @@ def _validate_options(parser, args):
             parser.error(f"{flag} does not apply to this mode")
 
     chosen = args.selection
-    if args.setup:
+    if args.get_secret is not None:
+        if chosen:
+            parser.error("--get-secret takes NAME as its option argument; no positional selection")
+    elif args.setup:
         if chosen:
             parser.error("--setup takes no positional selection")
     elif args.create:
@@ -160,6 +164,8 @@ def _run(args, parser, token):
     # Validate every identifier before constructing a store or touching its registry.
     if args.name is not None:
         validate_id(args.name)
+    if args.get_secret is not None:
+        validate_id(args.get_secret)
     if args.create and len(args.selection) == 2:
         validate_id(args.selection[0], kind="persona")
         validate_id(args.selection[1], kind="harness")
@@ -172,6 +178,15 @@ def _run(args, parser, token):
 
         setup_store(store, backend=args.backend, secret_root=args.secret_root)
         print(f"Configured agent store {store.root}.")
+        return 0
+
+    if args.get_secret is not None:
+        from .installation import fetch_secret
+
+        manager = store.load(args.get_secret)["runtime"]["secret_backend"]
+        if not manager:
+            raise ValueError(f"Agent {args.get_secret!r} is keyless; no credential is configured.")
+        print(fetch_secret(manager))
         return 0
 
     if not args.selection:

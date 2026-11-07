@@ -1,4 +1,4 @@
-"""Bundled expressions use core comprehensions without consumer callbacks or pruning."""
+"""Bundled expressions use core comprehensions and explicit transforms without callbacks."""
 
 import json
 import tomllib
@@ -92,6 +92,36 @@ def test_stored_model_comprehension_needs_no_contract(tmp_path, models):
         model: {"provider": "minimax", "remote_model_id": model} for model in models}
 
 
+@pytest.mark.parametrize("models", [[], ["m1"], ["m1", "m2", "m3", "m4", "m5"]])
+def test_stored_claude_config_omits_empty_mapping_merge(tmp_path, models):
+    active = models[0] if models else None
+    definition = yapyon.merge(make_agent("minimax", "claude"), yapyon.parse(
+        "agent:\n  persona:\n    mind:\n"
+        f"      model_list:= {models!r}\n      model_active:= {active!r}\n"
+        "      model_subagent:= None\n      context_size:= None\n"
+        "  harness:\n    config_store:\n      env: {EXTRA: 'kept'}\n"
+        "      payload: {null: None, empty: {}, items: [], zero: 0, flag: False}\n"))
+    store = AgentStore(tmp_path / "agents")
+    store.create("compact", definition)
+    source = (store.root / "harnesses/claude.harness.tmpl").read_text()
+    assert "  config_store:\n    {}\n    |\n" not in source
+    assert "for name, value in" not in source
+    assert "__not_none__().__as_json__()" in source
+    result = store.load("compact")["agent"]["harness"]
+    native = json.loads(result["content"])
+    assert native["env"]["EXTRA"] == "kept"
+    assert native["env"].get("ANTHROPIC_MODEL") == active
+    assert ("model" in native) == bool(models)
+    if models:
+        assert native["model"] == active
+    assert result["config_store"]["model"] == active
+    assert result["config_store"]["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] is None
+    assert "CLAUDE_CODE_SUBAGENT_MODEL" not in native["env"]
+    assert result["config_store"]["payload"] == {
+        "null": None, "empty": {}, "items": [], "zero": 0, "flag": False}
+    assert native["payload"] == {"empty": {}, "items": [], "zero": 0, "flag": False}
+
+
 def test_duplicate_model_keys_are_not_silently_overwritten(tmp_path):
     definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse(
         'agent:\n  persona:\n    mind:\n      model_list:= ["same", "same"]\n'))
@@ -117,14 +147,35 @@ def test_native_serialization_keeps_declared_empty_false_and_zero_values(tmp_pat
     assert result["config_store"]["payload"] == payload
 
 
-def test_json_native_serialization_preserves_null_and_list_positions(tmp_path):
-    payload = {"explicit_null": None, "positions": [None, "", {}, [], 0, False]}
+@pytest.mark.parametrize("content,cleaned", [
+    (None, True),
+    ('y"{__not_none__(config_store).__as_json__()}"', True),
+    ('y"{config_store.__as_json__()}"', False),
+], ids=["template_method", "explicit_function", "unfiltered_override"])
+def test_json_none_removal_is_explicit_and_preserves_source(tmp_path, content, cleaned):
+    payload = {
+        "explicit_null": None,
+        "positions": [None, "", {}, [], 0, False, {"gone": None, "kept": "x"},
+                      [None, 0, None, False, []]],
+        "nested": {"gone": None, "kept": 1},
+        "only_none_map": {"gone": None},
+        "only_none_list": [None, None],
+    }
+    expected_cleaned = {
+        "positions": ["", {}, [], 0, False, {"kept": "x"}, [0, False, []]],
+        "nested": {"kept": 1},
+        "only_none_map": {},
+        "only_none_list": [],
+    }
     definition = yapyon.merge(make_agent("minimax", "claude"), yio.value_tree({
         "agent": {"harness": {"config_store": {"payload": payload}}}}))
+    if content is not None:
+        definition.merge(yapyon.parse(f"agent:\n  harness:\n    content:= {content}\n"))
     store = AgentStore(tmp_path / "agents")
     store.create("nulls", definition)
     harness = store.load("nulls")["agent"]["harness"]
-    assert json.loads(harness["content"])["payload"] == payload
+    native = json.loads(harness["content"])
+    assert native["payload"] == (expected_cleaned if cleaned else payload)
     assert harness["config_store"]["payload"] == payload
 
 

@@ -35,6 +35,21 @@ def test_read_empty_store_does_not_create_it(store):
     assert not store.root.exists()
 
 
+def test_registry_keeps_environment_policy_after_agents(store):
+    expected_allow = store.settings["env_allow"]
+    store.configure(env_add=["MY_ENDPOINT"])
+    store.create("scout", make_agent("ollama", "codex"))
+    saved = yapyon.loads_record(store.registry_path.read_text())
+    assert saved["env_add"] == ["MY_ENDPOINT"]
+    assert saved["env_allow"] == expected_allow
+    assert list(saved)[-2:] == ["env_add", "env_allow"]
+    assert list(saved).index("agents") < list(saved).index("env_add")
+    store.configure(secret_root="custom")
+    updated = yapyon.loads_record(store.registry_path.read_text())
+    assert updated == {**saved, "secret_root": "custom"}
+    assert list(updated)[-2:] == ["env_add", "env_allow"]
+
+
 def test_create_materializes_only_used_composed_categories(store):
     definition = load_preset(("minimax_claude", "agent"))
     path = store.create("scout", definition)
@@ -55,6 +70,20 @@ def test_create_materializes_only_used_composed_categories(store):
     persona = yapyon.parse_file(store.root / "personas/minimax.persona.tmpl")
     assert persona["persona"].kind == "mapping"
     assert persona["persona"]["desc"].value == "Minimax"
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+@pytest.mark.parametrize("keyed", [False, True])
+def test_runtime_agent_path_is_invocation_owned_scalar(store, tmp_path, harness, keyed):
+    if keyed:
+        store.configure(secret_backend="pass")
+    destination = tmp_path / "selected agent"
+    candidate = store.prepare_create("scout", make_agent("ollama", harness), path=destination)
+    assert not destination.exists()
+    assert candidate.resolved["runtime"]["agent_path"] == str(destination)
+    assert candidate.resolved["agent"]["harness"]["path"] == str(destination / "harness")
+    assert store.commit(candidate) == destination
+    assert store.load("scout")["runtime"]["agent_path"] == str(destination)
 
 
 def test_reload_without_shipped_template_library(store, monkeypatch):
@@ -96,6 +125,33 @@ def test_rename_does_not_move_directory_or_default_secret_entry(store):
     assert resolved["agent"]["harness"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
 
 
+@pytest.mark.parametrize("backend", ["pass", "gopass", "prs"])
+def test_default_secret_root_is_persisted_and_applied(store, backend):
+    store.configure(secret_backend=backend)
+    assert yapyon.parse_file(store.registry_path)["secret_root"].value == "agents"
+    store = AgentStore(store.root)
+    store.create("scout", make_agent("minimax", "claude"))
+    resolved = store.load("scout")
+    assert resolved["agent"]["secret"]["entry"] == "scout"
+    assert resolved["runtime"]["secret_backend"]["entry"] == "agents/scout"
+    assert resolved["runtime"]["secret_backend"]["fetch"].endswith(" agents/scout")
+    assert resolved["runtime"]["secret_backend"]["store"].endswith(" agents/scout")
+
+
+@pytest.mark.parametrize("prefix", ["", "personal/agents"])
+def test_explicit_secret_root_is_preserved_on_reload(store, prefix):
+    store.configure(secret_backend="pass", secret_root=prefix)
+    store.create("scout", make_agent("minimax", "claude"))
+    before = store.registry_path.read_bytes()
+    store = AgentStore(store.root)
+    assert store.settings["secret_root"] == prefix
+    expected = prefix + "/scout" if prefix else "scout"
+    manager = store.load("scout")["runtime"]["secret_backend"]
+    assert manager["entry"] == expected
+    assert manager["fetch"] == "pass show " + expected
+    assert store.registry_path.read_bytes() == before
+
+
 def test_shared_explicit_secret_entry(store):
     store.configure(secret_backend="pass")
     for name in ("one", "two"):
@@ -103,7 +159,7 @@ def test_shared_explicit_secret_entry(store):
         definition["agent"].overrides  # Reading overrides must not mutate the source.
         definition = yapyon.merge(definition, yapyon.parse('agent:\n  secret: {entry: "shared/key"}'))
         store.create(name, definition)
-        assert store.load(name)["runtime"]["secret_backend"]["entry"] == "shared/key"
+        assert store.load(name)["runtime"]["secret_backend"]["entry"] == "agents/shared/key"
 
 
 def test_keyless_stays_keyless_after_backend_configured(store):
@@ -276,7 +332,7 @@ def test_every_supported_pair_renders_without_pg_functions(store, persona, harne
             assert native["models"] == {}
 
 
-def test_claude_optional_defaults_omit_only_generated_none_values(store):
+def test_claude_none_filter_cleans_native_copy_only(store):
     definition = yapyon.merge(make_agent("ollama", "claude"), yapyon.parse('''agent:
   harness:
     config_store:
@@ -286,16 +342,21 @@ def test_claude_optional_defaults_omit_only_generated_none_values(store):
     harness = store.load("custom")["agent"]["harness"]
     native = json.loads(harness["content"])
     assert "model" not in native
-    assert {"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION",
-            "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"}.isdisjoint(native["env"])
-    assert native["env"]["CUSTOM_NULL"] is None
+    optional = {"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_CUSTOM_MODEL_OPTION",
+                "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"}
+    assert optional.isdisjoint(native["env"])
+    assert all(harness["config_store"]["env"][key] is None for key in optional)
+    assert harness["config_store"]["model"] is None
+    assert harness["config_store"]["env"]["CUSTOM_NULL"] is None
+    assert "CUSTOM_NULL" not in native["env"]
     assert native["env"]["CUSTOM_EMPTY"] == ""
     assert native["env"]["CUSTOM_ZERO"] == 0
     assert native["env"]["CUSTOM_FALSE"] is False
     source = read_document(store.root / "harnesses/claude.harness.tmpl").to_source()
-    assert "for name, value" in source and "if (value is not None)" in source
+    assert "__not_none__().__as_json__()" in source
+    assert "for name, value" not in source
     assert yapyon.parse(source).to_source() == source
 
 

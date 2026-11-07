@@ -11,7 +11,6 @@ harness<base.harness>:
   path_var: "CODEX_HOME"
   supported_dialects: ["responses", "chat"]    # ordered by preference
   config_file: y"{path}/config.toml"
-  protocol: [dialect for dialect in supported_dialects if persona.mind.dialects.__get__(dialect) is not None][0]
 
   config_store:
     model: (persona.mind.model_active)
@@ -34,7 +33,3 @@ harness<base.harness>:
 
 
 # For later: http_headers = { "X-Account-Id" = "your-account-id", "User-Agent" = "Codex" }
-
-### `protocol` sits at harness level, NOT in config_store: config_store is serialized verbatim, so
-### a scratch key there would emit a stray `protocol = "responses"` into the user's config.toml.
-### Scope lookup still finds it from inside the nested provider table.

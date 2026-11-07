@@ -96,10 +96,11 @@ pg --export explorer.cfg explorer
 pg --remove explorer
 ```
 
-`--create`, `--update`, `--remove`, `--export FILE`, and `--setup` are separate modes. Creation
-accepts a persona and harness, or an agent document; existing-agent operations select one
+`--create`, `--update`, `--remove`, `--export FILE`, `--setup`, and `--get-secret NAME` are separate modes.
+Creation accepts a persona and harness, or an agent document; existing-agent operations select one
 registered name. Export writes a reusable, unfinished agent document, not a token or a resolved
-harness settings file.
+harness settings file. `--get-secret NAME` prints only the fetched credential and a newline; failures,
+including keyless agents, use stderr and a nonzero exit status. Its stdout is intentionally sensitive.
 
 For custom endpoints or models, write an agent document rather than defining a variant with
 CLI flags:
@@ -138,6 +139,7 @@ copy it to a `.cfg` or `.tmpl` file before using it with the CLI.
 | `--remove`, `-r` | Remove an agent's registration, wrapper, and generated files |
 | `--export FILE` | Export an agent document without installing it |
 | `--setup` | Configure the store's secret backend |
+| `--get-secret NAME` | Print NAME's credential to stdout (sensitive; read-only) |
 | `--backend NAME` | Select `pass`, `gopass`, or `prs` during setup |
 | `--secret-root ROOT` | Set the manager-entry prefix during setup |
 | `--name NAME` | Choose a creation name or rename an existing agent |
@@ -150,11 +152,12 @@ copy it to a `.cfg` or `.tmpl` file before using it with the CLI.
 | `--no-wrapper` | Skip shell-wrapper installation |
 | `--force` | Allow export to replace an existing output file |
 
-`--path` is creation-only. Credential, verification, and wrapper flags apply to creation/update;
+`--path` is creation-only. Credential-import, verification, and wrapper flags apply to creation/update;
 `--token` and `--no-token` are mutually exclusive. Export selects an existing agent only, and cannot
 overwrite its installed `<agent-directory>/agent.cfg`. See `pg --help` for mode-specific restrictions.
-Removal deletes the entire registered agent directory, including files you added, and its wrapper.
-Shared components and password-manager entries are retained.
+Removal deletes the registered agent directory, including files you added, and its wrapper. If the
+directory is a symlink, only the link is removed, not its target. Shared components and password-manager
+entries are retained.
 
 ## Agent Store & Configuration
 
@@ -165,14 +168,15 @@ Composed components used by agents are stored in `<agent-store>/personas/`, `<ag
 `<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
 copied into the store.
 
-Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.0 or newer within the 0.6 series), not YAML:
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.4 or newer within the 0.6 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
 Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
 a whole value without converting it to text. Runtime supplies the agent directory and secret backend;
 agent documents cannot set `agent.path`.
 
 Saved documents preserve unfinished slots and expressions, but their comments and layout are
-normalized. Unsafe deferred merges are refused rather than saved with different semantics.
+normalized. Safe merges are compacted; necessary slot/composition layers remain explicit. Source
+that cannot be saved faithfully is refused rather than written with different semantics.
 See the [Config Reference Manual](CONFIG_REFERENCE.md) for fields, store layout, and migration.
 
 ### Security

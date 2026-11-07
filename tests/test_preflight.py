@@ -186,6 +186,10 @@ def test_successful_import_and_readback_happen_before_registration(environment, 
     before = snapshot(environment.home)
     def imported(manager, token):
         assert token == TOKEN
+        assert manager["name"] == "pass"
+        assert manager["entry"] == "agents/test_agent"
+        assert manager["fetch"] == "pass show agents/test_agent"
+        assert manager["store"] == "pass insert -m -f agents/test_agent"
         assert snapshot(environment.home) == before
         assert environment.store.agents() == {}
     def readback(manager):
@@ -199,7 +203,9 @@ def test_successful_import_and_readback_happen_before_registration(environment, 
     path = environment.store.locate("test_agent")
     settings = json.loads((path / "harness" / "settings.json").read_text())
     assert "ANTHROPIC_AUTH_TOKEN" not in settings["env"]
-    assert "test_agent()" in (environment.home / ".bashrc").read_text()
+    wrapper = (environment.home / ".bashrc").read_text()
+    assert "test_agent()" in wrapper
+    assert "_pg_token=$(pass show agents/test_agent </dev/null 2>/dev/null)" in wrapper
     assert all(TOKEN.encode() not in value for key, value in snapshot(environment.home).items() if key != "input-key")
     output = capsys.readouterr()
     assert TOKEN not in output.out + output.err

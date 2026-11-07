@@ -4,7 +4,7 @@ from .composition import compose, compose_preset, load_preset, write_document
 from .store import AgentStore, make_agent
 
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 
 
 def main(argv=None):

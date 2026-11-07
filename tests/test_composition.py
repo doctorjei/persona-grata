@@ -165,6 +165,52 @@ def test_every_bundled_category_composes_and_persists(kind, name):
     assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
 
 
+def test_compact_dialect_source_preserves_deferred_endpoints(tmp_path):
+    path = write_document(compose_preset("dialect", "anthropic"), tmp_path / "dialect.tmpl")
+    assert "|" not in path.read_text()
+    restored = yapyon.parse_file(path)
+    assert restored["dialect"]["api_uri"].lexeme == 'y"{endpoint}"'
+    for endpoint in ("https://first.example", "https://second.example/anthropic"):
+        tree = yapyon.parse(f'endpoint: {endpoint!r}\ndialect<>: {{}}')
+        tree["dialect"].fill(restored["dialect"])
+        dialect = tree.resolve()["dialect"]
+        assert dialect["name"] == "anthropic"
+        assert dialect["api_uri"] == endpoint
+        assert dialect["msg_uri"] == endpoint + "/v1/messages"
+        assert dialect["model_uri"] == endpoint + "/v1/models"
+        assert dialect["emb_uri"] is None
+        assert dialect["verify"]["check_uri"] == endpoint + "/v1/messages"
+        assert dialect["verify"]["headers"] == ["anthropic-version: 2023-06-01"]
+
+
+@pytest.mark.parametrize("name", ["claude", "codex"])
+def test_harness_source_keeps_one_inherited_protocol(tmp_path, name):
+    path = write_document(compose_preset("harness", name), tmp_path / "harness.tmpl")
+    source = path.read_text()
+    assert source.count("[dialect for dialect in supported_dialects ") == 1
+    restored = yapyon.parse_file(path)
+    assert restored["harness"]["protocol"].kind == "expression"
+    assert restored.to_source() == source
+
+
+def test_compact_persona_slot_overrides_remain_deferred(tmp_path):
+    path = write_document(compose_preset("persona", "minimax"), tmp_path / "persona.tmpl")
+    source = path.read_text()
+    assert "|" not in source
+    for endpoint in ("https://first.example", "https://second.example/custom"):
+        restored = yapyon.parse_file(path)
+        mind = restored["persona"]["mind"]
+        anthropic = mind["dialects"]["anthropic"]
+        assert anthropic.label == ("anthropic", "dialect")
+        assert anthropic.overrides["api_uri"].lexeme == 'y"{endpoint}/anthropic"'
+        mind["endpoint"].replace(yapyon.parse(repr(endpoint)))
+        resolved = compose(restored).resolve()["persona"]["mind"]["dialects"]
+        assert resolved["anthropic"]["api_uri"] == endpoint + "/anthropic"
+        assert resolved["anthropic"]["msg_uri"] == endpoint + "/anthropic/v1/messages"
+        assert resolved["chat"]["api_uri"] == endpoint
+        assert resolved["responses"]["api_uri"] == endpoint
+
+
 def test_computed_merge_saves_as_explicit_layers(tmp_path):
     tree = yapyon.merge(
         yapyon.parse('key: "x"\nitems: {y"{key}": 1}'),

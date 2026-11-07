@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.6] — 2026-11-07
+
+### Added
+
+- `--get-secret NAME` reads an agent's credential through its configured password manager without
+  changing the agent store. Success prints only the credential; keyless agents and failed reads return an error.
+
+### Changed
+
+- Require yapyon 0.6.4 or newer within the 0.6 series for recursive source compaction, corrected
+  empty-override and `None` precedence semantics, and explicit `__not_none__()` filtering.
+- Claude renders a recursively cleaned copy of `config_store`, omitting `None` fields and list elements
+  while retaining the original data, empty containers, zero, and false values.
+- Default password-manager entry prefix to `agents`; retain explicitly configured prefixes, including empty ones.
+- Write short store settings and agent paths before environment policy, with the long `env_allow` list last.
+
+### Fixed
+
+- Assign the invocation-owned runtime agent path as a scalar rather than filling a dictionary-override slot.
+- Inherit dialect selection from the base harness instead of repeating the expression in each preset.
+
 ## [0.0.5] — 2026-11-01
 
 ### Changed

@@ -148,8 +148,8 @@ inside a y-string.
 ## Credentials, Updates, & Export
 
 `agent.secret: None` is explicitly keyless. A secret mapping may set `entry` instead of the agent
-directory's basename; the store's `secret_root` prefix applies to either. The store chooses one manager
-(`pass`, `gopass`, or `prs`). It fetches credentials at launch and never creates a plaintext token
+directory's basename; the store's `secret_root` prefix (default `"agents"`) applies to either. The store
+chooses one manager (`pass`, `gopass`, or `prs`). It fetches credentials at launch and never creates a plaintext token
 backend or `.secret_path` pointer. Keep the manager usable without an unattended passphrase prompt.
 
 ```bash
@@ -159,8 +159,9 @@ pg --export orion-copy.cfg orion  # Export an existing registered agent
 pg --remove orion                 # Confirm removal; manager entries are retained
 ```
 
-Removal deletes the entire registered agent directory, including any files you added, while
-retaining shared components and password-manager entries.
+Removal deletes the registered agent directory, including any files you added, while retaining shared
+components and password-manager entries. If the registered directory is a symlink, removal unlinks
+it without deleting its target.
 
 Export produces a reusable partial agent document, not a resolved harness file. `--force` allows
 replacing an export destination, but never the installed `agent.cfg` itself. Saved documents use

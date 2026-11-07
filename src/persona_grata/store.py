@@ -71,8 +71,8 @@ class AgentStore:
 
     @staticmethod
     def _defaults():
-        return {"format": FORMAT, "secret_backend": None, "secret_root": "",
-                "env_allow": sorted(yapyon.STANDARD_ENV), "env_add": [], "agents": {}}
+        return {"format": FORMAT, "secret_backend": None, "secret_root": "agents",
+                "agents": {}, "env_add": [], "env_allow": sorted(yapyon.STANDARD_ENV)}
 
     def _read(self):
         if not self.registry_path.exists():
@@ -311,7 +311,7 @@ class AgentStore:
                 if auth.kind == "scalar" and auth.value in env:
                     env[auth.value].remove()
         tree["runtime"].fill(yapyon.parse("{}"))
-        tree["runtime"]["agent_path"].fill(yio.value_tree(str(path)))
+        tree["runtime"]["agent_path"].replace(yio.value_tree(str(path)))
         tree["runtime"]["secret_backend"].fill(manager)
         remaining = tree.slots()
         if remaining:
