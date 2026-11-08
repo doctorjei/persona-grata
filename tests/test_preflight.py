@@ -37,7 +37,7 @@ def snapshot(root):
 
 @pytest.fixture
 def backend(environment, monkeypatch):
-    environment.store.configure(secret_backend="pass")
+    environment.store.configure(defaults={"secret": {"backend": "pass"}})
     state = SimpleNamespace(readiness=Mock(return_value=False), fetch=Mock(return_value=TOKEN), store=Mock())
     monkeypatch.setattr(inst, "_secret_probe", Mock())
     monkeypatch.setattr(inst.shutil, "which", lambda name: "/test-bin/" + name)
@@ -209,6 +209,47 @@ def test_successful_import_and_readback_happen_before_registration(environment, 
     assert all(TOKEN.encode() not in value for key, value in snapshot(environment.home).items() if key != "input-key")
     output = capsys.readouterr()
     assert TOKEN not in output.out + output.err
+
+
+@pytest.mark.parametrize("selection", ["gopass", "custom"])
+def test_agent_backend_override_reaches_preflight_import_and_wrapper(environment, backend, selection):
+    if selection == "gopass":
+        secret = 'agent:\n  secret<gopass.secret>:\n    entry: "shared/key"\n'
+        expected_name, expected_fetch = "gopass", "gopass show -o shared/key"
+    else:
+        secret = ('agent:\n  secret:\n    name: "custom_vault"\n    root: "separate"\n'
+                  '    entry: "shared/key"\n    probe: "custom-vault"\n'
+                  '    fetch: "custom-vault read shared/key"\n'
+                  '    store: "custom-vault write shared/key"\n')
+        expected_name, expected_fetch = "custom_vault", "custom-vault read shared/key"
+    definition = yapyon.merge(make_agent("ollama", "claude"), yapyon.parse(secret))
+    source = environment.home / "selected.cfg"
+    write_document(definition, source)
+    before = snapshot(environment.home)
+
+    def imported(manager, token):
+        assert manager["name"] == expected_name and manager["entry"] == "shared/key"
+        assert manager["fetch"] == expected_fetch
+        assert token == TOKEN
+        assert snapshot(environment.home) == before
+        assert environment.store.agents() == {}
+
+    def readback(manager):
+        assert manager["name"] == expected_name and manager["entry"] == "shared/key"
+        assert environment.store.agents() == {}
+        return TOKEN
+
+    backend.store.side_effect = imported
+    backend.fetch.side_effect = readback
+    assert cli.main(["--create", str(source), "--name", "selected", "--token", str(environment.key)]) == 0
+    selected = environment.store.load("selected")["agent"]["secret"]
+    backend.readiness.assert_called_once_with(selected, writing=True)
+    backend.store.assert_called_once_with(selected, TOKEN)
+    backend.fetch.assert_called_once_with(selected)
+    wrapper = (environment.home / ".bashrc").read_text()
+    assert f"_pg_token=$({expected_fetch} </dev/null 2>/dev/null)" in wrapper
+    assert "pass show agents/selected" not in wrapper
+    assert TOKEN not in wrapper
 
 
 def test_failed_create_does_not_occupy_name_before_backend_setup(environment, backend):

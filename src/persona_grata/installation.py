@@ -331,19 +331,18 @@ def _ensure_secret_store(backend):
 
 
 def setup_store(store, *, backend=None, secret_root=None):
-    """Initialize a selected manager, then persist store-wide settings.
+    """Initialize a selected manager, then persist default credential settings.
 
     No backend (and none already configured) is explicitly keyless.  Custom
     managers must already be initialized. ``secret_root`` is an entry prefix,
     not the manager's on-disk store directory.
     """
-    settings = dict(store.settings)
-    selected = backend if backend is not None else settings.get("secret_backend")
+    settings = store.settings["defaults"]["secret"]
+    selected = backend if backend is not None else settings["backend"]
     changes = {}
     if secret_root is not None:
-        if secret_root:
-            validate_entry(secret_root)
-        changes["secret_root"] = secret_root
+        validate_entry(secret_root)
+        changes["root"] = secret_root
     if selected:
         name = selected.get("name") if isinstance(selected, dict) else selected
         if not isinstance(name, str) or not name:
@@ -357,10 +356,10 @@ def setup_store(store, *, backend=None, secret_root=None):
         else:
             _fail(f"Secret backend '{name}' has no guided setup; configure and initialize it by hand.")
         if backend is not None:
-            changes["secret_backend"] = backend
+            changes["backend"] = backend
     else:
         print("No credential backend configured; agents without secrets are keyless.")
-    return store.configure(**changes)
+    return store.configure(defaults={"secret": changes}) if changes else store.configure()
 
 
 def _absolute(path):
@@ -627,12 +626,11 @@ def prepare_installation(resolved, *, name=None, token=None, verify=False, insta
     content = harness.get("content")
     if native_file is not None and not isinstance(content, str):
         _fail("Native harness content must be rendered text.")
-    manager = resolved["runtime"].get("secret_backend") or None
-    if agent.get("secret") is None:
+    manager = agent.get("secret")
+    if manager is None:
         if token is not None:
             _fail("This agent is keyless; there is nowhere to store the supplied token.")
-        manager = None
-    elif not manager:
+    elif not isinstance(manager, dict) or not manager:
         _fail("Agent requests a credential but no secret backend is configured; run store setup first.")
     for target in (config_dir / _OWNER_FILE, *((native_file,) if native_file is not None else ())):
         check_write_path(target)

@@ -183,7 +183,7 @@ def _run(args, parser, token):
     if args.get_secret is not None:
         from .installation import fetch_secret
 
-        manager = store.load(args.get_secret)["runtime"]["secret_backend"]
+        manager = store.load(args.get_secret)["agent"]["secret"]
         if not manager:
             raise ValueError(f"Agent {args.get_secret!r} is keyless; no credential is configured.")
         print(fetch_secret(manager))

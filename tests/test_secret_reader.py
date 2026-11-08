@@ -28,9 +28,9 @@ def reader_store(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("AGENT_STORE_DIR", str(tmp_path / "agents"))
     store = AgentStore()
-    store.configure(secret_backend="pass", secret_root="team/agents")
-    definition = yapyon.merge(make_agent("minimax", "claude"), yio.value_tree({
-        "agent": {"secret": {"entry": "folder/key with spaces;not-a-command"}}}))
+    store.configure(defaults={"secret": {"backend": "pass", "root": "team/agents"}})
+    definition = yapyon.merge(make_agent("minimax", "claude"), yapyon.parse(
+        'agent:\n  secret<>:\n    entry: "folder/key with spaces;not-a-command"\n'))
     store.create("scout", definition)
 
     def forbidden(*args, **kwargs):
@@ -57,9 +57,38 @@ def test_get_secret_prints_only_credential_without_writes(reader_store, monkeypa
     assert output.out == TOKEN + "\n"
     assert output.err == ""
     fetch.assert_called_once()
-    assert fetch.call_args.args[0]["entry"] == "team/agents/folder/key with spaces;not-a-command"
+    assert fetch.call_args.args[0]["entry"] == "folder/key with spaces;not-a-command"
     assert snapshot(reader_store.root) == before
     assert list(Path.home().iterdir()) == []
+
+
+@pytest.mark.parametrize("selection", ["gopass", "custom"])
+def test_get_secret_uses_agent_backend_not_runtime_default(reader_store, monkeypatch, capsys, selection):
+    if selection == "gopass":
+        definition = yapyon.merge(make_agent("minimax", "claude"), yapyon.parse(
+            'agent:\n  secret<gopass.secret>:\n    entry: "shared/key"\n'))
+        expected_name = "gopass"
+    else:
+        definition = yapyon.merge(make_agent("minimax", "claude"), yio.value_tree({
+            "agent": {"secret": {
+                "name": "custom_vault", "root": "separate", "entry": "shared/key",
+                "probe": "custom-vault", "fetch": "custom-vault read shared/key",
+                "store": "custom-vault write shared/key",
+            }}}))
+        expected_name = "custom_vault"
+    reader_store.create("selected", definition)
+    resolved = reader_store.load("selected")
+    assert resolved["runtime"]["secret_backend"]["name"] == "pass"
+    assert resolved["agent"]["secret"]["name"] == expected_name
+    before = snapshot(reader_store.root)
+    fetch = Mock(return_value=TOKEN)
+    monkeypatch.setattr(installation, "fetch_secret", fetch)
+    assert cli.main(["--get-secret", "selected"]) == 0
+    output = capsys.readouterr()
+    assert output.out == TOKEN + "\n" and output.err == ""
+    fetch.assert_called_once_with(resolved["agent"]["secret"])
+    assert fetch.call_args.args[0]["entry"] == "shared/key"
+    assert snapshot(reader_store.root) == before
 
 
 def test_get_secret_keyless_fails_without_fetch(reader_store, monkeypatch, capsys):
@@ -166,7 +195,7 @@ exit "$FAKE_READER_EXIT"
     environment = {
         "HOME": str(Path.home()), "PATH": str(bin_dir) + os.pathsep + os.defpath,
         "AGENT_STORE_DIR": str(reader_store.root), "FAKE_READER_TOKEN": TOKEN,
-        "EXPECTED_ENTRY": "team/agents/folder/key with spaces;not-a-command",
+        "EXPECTED_ENTRY": "folder/key with spaces;not-a-command",
         "FAKE_READER_EXIT": "7" if fail else "0",
     }
     before = snapshot(reader_store.root)

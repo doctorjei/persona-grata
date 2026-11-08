@@ -31,22 +31,22 @@ def test_default_store_precedence(monkeypatch, tmp_path):
 
 def test_read_empty_store_does_not_create_it(store):
     assert store.agents() == {}
-    assert store.settings["secret_backend"] is None
+    assert store.settings["defaults"]["secret"]["backend"] is None
     assert not store.root.exists()
 
 
 def test_registry_keeps_environment_policy_after_agents(store):
     expected_allow = store.settings["env_allow"]
-    store.configure(env_add=["MY_ENDPOINT"])
+    store.configure(env_add=["MY_ENDPOINT"], env_allow=expected_allow)
     store.create("scout", make_agent("ollama", "codex"))
     saved = yapyon.loads_record(store.registry_path.read_text())
     assert saved["env_add"] == ["MY_ENDPOINT"]
     assert saved["env_allow"] == expected_allow
     assert list(saved)[-2:] == ["env_add", "env_allow"]
     assert list(saved).index("agents") < list(saved).index("env_add")
-    store.configure(secret_root="custom")
+    store.configure(defaults={"secret": {"root": "custom"}})
     updated = yapyon.loads_record(store.registry_path.read_text())
-    assert updated == {**saved, "secret_root": "custom"}
+    assert updated == {**saved, "defaults": {"secret": {"root": "custom"}}}
     assert list(updated)[-2:] == ["env_add", "env_allow"]
 
 
@@ -76,7 +76,7 @@ def test_create_materializes_only_used_composed_categories(store):
 @pytest.mark.parametrize("keyed", [False, True])
 def test_runtime_agent_path_is_invocation_owned_scalar(store, tmp_path, harness, keyed):
     if keyed:
-        store.configure(secret_backend="pass")
+        store.configure(defaults={"secret": {"backend": "pass"}})
     destination = tmp_path / "selected agent"
     candidate = store.prepare_create("scout", make_agent("ollama", harness), path=destination)
     assert not destination.exists()
@@ -111,40 +111,41 @@ def test_same_pair_can_have_distinct_names_and_paths(store, tmp_path):
         store.create("three", make_agent("kimi", "codex"), path=two)
 
 
-def test_rename_does_not_move_directory_or_default_secret_entry(store):
-    store.configure(secret_backend="pass", secret_root="personal/agents")
+def test_rename_keeps_directory_but_name_based_default_entry_follows_name(store):
+    store.configure(defaults={"secret": {"backend": "pass", "root": "personal/agents"}})
     path = store.create("before", make_agent("minimax", "claude"))
     store.rename("before", "after")
     assert store.agents() == {"after": path}
     resolved = store.load("after")
     assert resolved["agent"]["name"] == "after"
-    assert resolved["agent"]["secret"]["entry"] == "before"
-    assert resolved["runtime"]["secret_backend"]["entry"] == "personal/agents/before"
+    assert resolved["agent"]["secret"]["entry"] == "personal/agents/after"
+    assert resolved["runtime"]["secret_backend"]["entry"] == "personal/agents/after"
     native = json.loads(resolved["agent"]["harness"]["content"])
     assert "ANTHROPIC_AUTH_TOKEN" not in native["env"]
     assert resolved["agent"]["harness"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
 
 
 @pytest.mark.parametrize("backend", ["pass", "gopass", "prs"])
-def test_default_secret_root_is_persisted_and_applied(store, backend):
-    store.configure(secret_backend=backend)
-    assert yapyon.parse_file(store.registry_path)["secret_root"].value == "agents"
+def test_default_secret_root_is_inherited_and_applied(store, backend):
+    store.configure(defaults={"secret": {"backend": backend}})
+    assert yapyon.loads_record(store.registry_path.read_text()) == {
+        "defaults": {"secret": {"backend": backend}}}
     store = AgentStore(store.root)
     store.create("scout", make_agent("minimax", "claude"))
     resolved = store.load("scout")
-    assert resolved["agent"]["secret"]["entry"] == "scout"
+    assert resolved["agent"]["secret"]["entry"] == "agents/scout"
     assert resolved["runtime"]["secret_backend"]["entry"] == "agents/scout"
     assert resolved["runtime"]["secret_backend"]["fetch"].endswith(" agents/scout")
     assert resolved["runtime"]["secret_backend"]["store"].endswith(" agents/scout")
 
 
-@pytest.mark.parametrize("prefix", ["", "personal/agents"])
+@pytest.mark.parametrize("prefix", ["team", "personal/agents", "literal{agent.name}"])
 def test_explicit_secret_root_is_preserved_on_reload(store, prefix):
-    store.configure(secret_backend="pass", secret_root=prefix)
+    store.configure(defaults={"secret": {"backend": "pass", "root": prefix}})
     store.create("scout", make_agent("minimax", "claude"))
     before = store.registry_path.read_bytes()
     store = AgentStore(store.root)
-    assert store.settings["secret_root"] == prefix
+    assert store.settings["defaults"]["secret"]["root"] == prefix
     expected = prefix + "/scout" if prefix else "scout"
     manager = store.load("scout")["runtime"]["secret_backend"]
     assert manager["entry"] == expected
@@ -153,21 +154,21 @@ def test_explicit_secret_root_is_preserved_on_reload(store, prefix):
 
 
 def test_shared_explicit_secret_entry(store):
-    store.configure(secret_backend="pass")
+    store.configure(defaults={"secret": {"backend": "pass"}})
     for name in ("one", "two"):
         definition = make_agent("minimax", "claude")
         definition["agent"].overrides  # Reading overrides must not mutate the source.
-        definition = yapyon.merge(definition, yapyon.parse('agent:\n  secret: {entry: "shared/key"}'))
+        definition = yapyon.merge(definition, yapyon.parse('agent:\n  secret<>: {entry: "shared/key"}'))
         store.create(name, definition)
-        assert store.load(name)["runtime"]["secret_backend"]["entry"] == "agents/shared/key"
+        assert store.load(name)["agent"]["secret"]["entry"] == "shared/key"
 
 
 def test_keyless_stays_keyless_after_backend_configured(store):
     store.create("local", make_agent("ollama", "codex"))
-    store.configure(secret_backend="pass")
+    store.configure(defaults={"secret": {"backend": "pass"}})
     resolved = store.load("local")
     assert resolved["agent"]["secret"] is None
-    assert resolved["runtime"]["secret_backend"] == {}
+    assert resolved["runtime"]["secret_backend"]["name"] == "pass"
     assert tomllib.loads(resolved["agent"]["harness"]["content"])[
         "model_providers"]["ollama"]["env_key"] == ""
 
@@ -191,14 +192,14 @@ def test_required_slot_refuses_creation(store):
 def test_mapping_secret_without_backend_is_not_silently_keyless(store):
     definition = yapyon.merge(make_agent("minimax", "claude"),
                               yapyon.parse('agent: {secret: {entry: "x"}}'))
-    with pytest.raises(ValueError, match="secret backend"):
+    with pytest.raises(ValueError, match="agent.secret"):
         store.create("keyed", definition)
     assert store.agents() == {}
 
 
 @pytest.mark.parametrize("entry", ["../outside", "/absolute", "-option", "a/./b", "line\nbreak", "nul\x00byte"])
 def test_unsafe_secret_entries(store, entry):
-    store.configure(secret_backend="pass")
+    store.configure(defaults={"secret": {"backend": "pass"}})
     definition = yapyon.merge(make_agent("minimax", "claude"),
                               yio.value_tree({"agent": {"secret": {"entry": entry}}}))
     with pytest.raises(ValueError, match="secret entry"):
@@ -295,7 +296,7 @@ def test_load_uses_new_environment_allowlist(store, monkeypatch):
 
 
 @pytest.mark.parametrize("changes", [
-    {"secret_backend": "unknown"}, {"secret_root": "../bad"},
+    {"defaults": {"secret": {"backend": []}}}, {"defaults": {"secret": {"root": "../bad"}}},
     {"env_add": "NO"}, {"env_allow": [""]}, {"env_add": ["9BAD"]},
     {"agents": {}},
 ])
@@ -390,18 +391,18 @@ def test_malformed_agent_never_registers(store, definition):
 
 @pytest.mark.parametrize("backend", [[], {}, 12, True])
 def test_invalid_backend_types_are_clear_errors(store, backend):
-    with pytest.raises(ValueError, match="secret_backend"):
-        store.configure(secret_backend=backend)
+    with pytest.raises(ValueError, match="backend"):
+        store.configure(defaults={"secret": {"backend": backend}})
     store.root.mkdir(exist_ok=True)
-    store.registry_path.write_text('secret_backend: ' + repr(backend))
-    with pytest.raises(ValueError, match="secret_backend"):
+    store.registry_path.write_text(yapyon.dumps({"defaults": {"secret": {"backend": backend}}}))
+    with pytest.raises(ValueError, match="backend"):
         store.agents()
 
 
 @pytest.mark.parametrize("prefix", ["bad//prefix", "trailing/", "/leading"])
 def test_secret_root_uses_the_same_entry_grammar_as_installer(store, prefix):
     with pytest.raises(ValueError, match="secret entry"):
-        store.configure(secret_root=prefix)
+        store.configure(defaults={"secret": {"root": prefix}})
 
 
 def test_symlink_ancestor_redirects_update_to_its_target(store, tmp_path):
@@ -513,6 +514,6 @@ def test_failed_setup_does_not_leave_unregistered_backend(store, monkeypatch):
 
     monkeypatch.setattr(store, "_write", fail)
     with pytest.raises(OSError, match="disk full"):
-        store.configure(secret_backend="pass")
+        store.configure(defaults={"secret": {"backend": "pass"}})
     assert not list(store.root.rglob("*.tmpl"))
     assert not store.registry_path.exists()

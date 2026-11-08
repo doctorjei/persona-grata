@@ -605,7 +605,7 @@ def test_malformed_backend_registry_returns_error_not_traceback(hermetic_store):
     from persona_grata.composition import write_document
     from persona_grata.yapyon_io import value_tree
 
-    write_document(value_tree({"secret_backend": []}), hermetic_store.registry_path)
+    write_document(value_tree({"defaults": {"secret": {"backend": []}}}), hermetic_store.registry_path)
     assert cli.main([]) == 1
 
 

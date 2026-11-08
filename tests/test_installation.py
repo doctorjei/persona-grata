@@ -12,6 +12,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.response
+from unittest.mock import Mock
 
 import pytest
 
@@ -26,9 +27,9 @@ class Store:
         self.root.mkdir()
         self.registry = {}
         self.definitions = {}
-        self.settings = {}
+        self.settings = {"defaults": {"secret": {"backend": None, "root": "agents"}}}
 
-    def add(self, name="orion", *, path=None, manager=None, keyless=True):
+    def add(self, name="orion", *, path=None, manager=None, default_manager=None, keyless=True):
         path = path or self.root / name
         path.mkdir(parents=True)
         (path / "agent.cfg").write_text("agent: {}\n")
@@ -37,7 +38,7 @@ class Store:
             "agent": {
                 "name": name,
                 "persona": {"mind": {"model_active": "orion"}, "dialects": {}},
-                "secret": None if keyless else {"entry": "ignored-by-installer"},
+                "secret": None if keyless else copy.deepcopy(manager or {}),
                 "harness": {
                     "name": "fake-harness", "path": str(path / "harness"),
                     "config_file": str(path / "harness" / "config.json"),
@@ -46,7 +47,7 @@ class Store:
                     "wrapper_env": {},
                 },
             },
-            "runtime": {"agent_path": str(path), "secret_backend": manager or {}},
+            "runtime": {"agent_path": str(path), "secret_backend": copy.deepcopy(default_manager or {})},
         }
         return path
 
@@ -63,8 +64,9 @@ class Store:
         del self.registry[name]
 
     def configure(self, **changes):
-        self.settings.update(changes)
-        return dict(self.settings)
+        if "defaults" in changes:
+            self.settings["defaults"]["secret"].update(changes["defaults"]["secret"])
+        return copy.deepcopy(self.settings)
 
 
 @pytest.fixture
@@ -163,6 +165,44 @@ def test_new_credential_uses_stdin_and_manager_entry_is_single_argv(store, fake_
             assert "SECRET" not in file.read_text()
     assert "SECRET" not in (home / ".bashrc").read_text()
     assert not (home / "PWNED").exists()
+
+
+def test_agent_selected_backend_drives_preflight_import_readback_and_wrapper(store, fake_manager, home, monkeypatch):
+    manager, data = fake_manager
+    default = {
+        "name": "unused_default", "entry": "default/key", "probe": "unused-default",
+        "fetch": "unused-default fetch default/key", "store": "unused-default store default/key",
+    }
+    path = store.add(manager=manager, default_manager=default, keyless=False)
+    readiness = Mock(return_value=False)
+    probe = Mock(wraps=inst._secret_probe)
+    monkeypatch.setattr(inst, "_check_secret_store", readiness)
+    monkeypatch.setattr(inst, "_secret_probe", probe)
+    plan = inst.prepare_installation(store.load("orion"), token="SELECTED_SECRET")
+    assert plan.manager == manager
+    probe.assert_called_once_with(manager)
+    readiness.assert_called_once_with(manager, writing=True)
+    assert not (path / "harness").exists()
+    inst.commit_credential(plan)
+    assert calls(data) == [["store", manager["entry"]], ["fetch", manager["entry"]]]
+    inst.apply_installation(plan)
+    wrapper = (home / ".bashrc").read_text()
+    assert shlex.join(inst._command_argv(manager, "fetch")) in wrapper
+    assert "unused-default" not in wrapper
+    assert "SELECTED_SECRET" not in wrapper
+
+
+@pytest.mark.parametrize("token", [None, "SECRET"])
+def test_keyless_agent_ignores_runtime_default_backend(store, fake_manager, token):
+    manager, data = fake_manager
+    path = store.add(default_manager=manager)
+    if token is None:
+        assert inst.install_agent(store, "orion") == path
+    else:
+        with pytest.raises(ValueError, match="keyless"):
+            inst.install_agent(store, "orion", token=token)
+        assert not (path / "harness").exists()
+    assert calls(data) == []
 
 
 def test_existing_credential_is_reused_without_a_write(store, fake_manager):
@@ -651,22 +691,55 @@ def test_confirmation_rechecks_path_before_deletion(store, home):
 
 
 def test_setup_without_manager_is_keyless(store, capsys):
-    assert inst.setup_store(store, secret_root="team/keys") == {"secret_root": "team/keys"}
+    assert inst.setup_store(store, secret_root="team/keys")["defaults"]["secret"] == {
+        "backend": None, "root": "team/keys"}
     assert "No credential backend" in capsys.readouterr().out
 
 
 def test_setup_persists_only_after_manager_initialization(store, monkeypatch):
     initialized = []
     monkeypatch.setattr(inst, "_ensure_secret_store", initialized.append)
-    assert inst.setup_store(store, backend="pass", secret_root="team") == {"secret_backend": "pass", "secret_root": "team"}
+    assert inst.setup_store(store, backend="pass", secret_root="team")["defaults"]["secret"] == {
+        "backend": "pass", "root": "team"}
     assert initialized == ["pass"]
     def fail(backend):
         raise ValueError("manager not ready")
     monkeypatch.setattr(inst, "_ensure_secret_store", fail)
     with pytest.raises(ValueError):
         inst.setup_store(store, backend="prs", secret_root="changed")
-    assert store.settings["secret_backend"] == "pass"
-    assert store.settings["secret_root"] == "team"
+    assert store.settings["defaults"]["secret"] == {"backend": "pass", "root": "team"}
+
+
+def test_setup_uses_nested_backend_default_and_preserves_root(store, monkeypatch):
+    store.settings["defaults"]["secret"] = {"backend": "pass", "root": "retained/root"}
+    initialized = []
+    monkeypatch.setattr(inst, "_ensure_secret_store", initialized.append)
+    result = inst.setup_store(store)
+    assert initialized == ["pass"]
+    assert result["defaults"]["secret"] == {"backend": "pass", "root": "retained/root"}
+
+
+@pytest.mark.parametrize("root", ["", "../bad", "/absolute"])
+def test_setup_rejects_invalid_root_before_manager_initialization(store, monkeypatch, root):
+    initialized = Mock()
+    monkeypatch.setattr(inst, "_ensure_secret_store", initialized)
+    before = copy.deepcopy(store.settings)
+    with pytest.raises(ValueError, match="store-relative"):
+        inst.setup_store(store, backend="pass", secret_root=root)
+    initialized.assert_not_called()
+    assert store.settings == before
+
+
+def test_setup_real_store_persists_only_nested_overrides(home, monkeypatch):
+    import yapyon
+    from persona_grata import AgentStore
+
+    store = AgentStore(home / "configured-store")
+    monkeypatch.setattr(inst, "_ensure_secret_store", lambda backend: None)
+    result = inst.setup_store(store, backend="pass", secret_root="team/keys")
+    assert result["defaults"]["secret"] == {"backend": "pass", "root": "team/keys"}
+    assert yapyon.loads_record(store.registry_path.read_text()) == {
+        "defaults": {"secret": {"backend": "pass", "root": "team/keys"}}}
 
 
 def test_wizard_missing_store_without_tty_fails_fast(monkeypatch):
@@ -742,7 +815,7 @@ def test_actual_store_removal_unlinks_registered_agent_symlink_only(home):
     ("gopass", ["insert"], ["show", "-o"]),
     ("prs", ["add", "--no-interact", "--stdin"], ["show", "--no-interact", "--first"]),
 ])
-def test_actual_store_prefixed_secret_uses_presets_without_shell_splitting(home, fake_manager, backend, store_args, fetch_args):
+def test_actual_store_complete_secret_uses_presets_without_shell_splitting(home, fake_manager, backend, store_args, fetch_args):
     import yapyon
     from persona_grata.store import AgentStore
 
@@ -751,15 +824,15 @@ def test_actual_store_prefixed_secret_uses_presets_without_shell_splitting(home,
     executable.write_text(Path(manager["probe"]).read_text())
     executable.chmod(0o700)
     store = AgentStore(home / "real-store")
-    store.configure(secret_backend=backend, secret_root="team root's")
+    store.configure(defaults={"secret": {"backend": backend, "root": "team root's"}})
     entry = "custom key's name;$(touch PWNED)"
     definition = yapyon.parse(
         'agent<base.agent>:\n  persona<ollama.persona>:\n'
         '    mind:\n      model_list: ["example-model"]\n'
-        '  harness<codex.harness>: {}\n  secret:\n    entry: ' + json.dumps(entry) + '\n')
+        '  harness<codex.harness>: {}\n  secret<>:\n    entry: ' + json.dumps(entry) + '\n')
     path = store.create("orion", definition)
     inst.install_agent(store, "orion", token="SECRET", install_wrapper=False)
-    expected = "team root's/" + entry
+    expected = entry
     assert calls(data) == [[*store_args, expected], [*fetch_args, expected]]
     assert not (home / "PWNED").exists()
     assert not (path / "token").exists()
@@ -773,7 +846,7 @@ def test_setup_materializes_keyless_registry(home):
     assert not store.registry_path.exists()
     inst.setup_store(store)
     assert store.registry_path.exists()
-    assert store.settings["secret_backend"] is None
+    assert store.settings["defaults"]["secret"]["backend"] is None
 
 
 def test_verification_rejection_happens_before_storing(store, fake_manager, monkeypatch):

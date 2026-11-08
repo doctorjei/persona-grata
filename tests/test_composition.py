@@ -12,6 +12,15 @@ from persona_grata.composition import (
 )
 
 
+@pytest.mark.parametrize("name", ["base", "pass", "gopass", "prs"])
+def test_secret_presets_load_from_plural_directory(name):
+    tree = compose_preset("secret", name)
+    assert KIND_DIRS["secret"] == "secrets"
+    assert tree["secret"].kind == "mapping"
+    assert not tree.slots()
+    assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
+
+
 def test_selected_category_keeps_unfilled_slots_and_expressions(tmp_path):
     original = load_preset(("minimax_claude", "agent"))
     before = original.to_source()
@@ -20,7 +29,7 @@ def test_selected_category_keeps_unfilled_slots_and_expressions(tmp_path):
     assert tree["agent"].kind == "mapping"
     assert tree["agent"]["desc"].lexeme == 'y"{name}"'
     assert {slot.label for slot in tree.slots()} == {
-        ("minimax", "persona"), ("claude", "harness")}
+        ("minimax", "persona"), ("claude", "harness"), ()}
     path = write_document(tree, tmp_path / "agent.cfg")
     restored = yapyon.parse_file(path)
     assert restored.to_source() == tree.to_source()
@@ -37,7 +46,7 @@ agent<minimax_claude.agent>: {}
     continued = compose(restored)
     unsaved = compose(first)
     assert continued.to_source() == unsaved.to_source()
-    assert [slot.label for slot in continued.slots()] == [()]
+    assert {slot.path for slot in continued.slots()} == {("runtime",), ("agent", "secret")}
     assert continued["agent"]["persona"]["mind"]["model_list"][0].value
 
 
@@ -163,6 +172,27 @@ def test_every_bundled_category_composes_and_persists(kind, name):
     assert tree[kind].kind == "mapping"
     assert not any(slot.label and slot.label[1] == kind for slot in tree.slots())
     assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
+
+
+@pytest.mark.parametrize("secret", ["secret: None", "secret<>: {}"])
+def test_agent_lookup_can_return_a_branch_handle(secret):
+    source = yapyon.parse('name: "example"\n' + secret)
+    tree = compose(yapyon.parse('agent<base.agent>: {}'), lookup=lambda label: source.root)
+    assert tree["agent"]["name"].value == "example"
+    if source["secret"].kind == "slot":
+        assert [slot.path for slot in tree.slots()] == [("agent", "secret")]
+    else:
+        assert tree["agent"]["secret"].value is None
+
+
+def test_default_secret_pass_through_does_not_override_a_preset_backend():
+    sources = {
+        ("base", "agent"): yapyon.parse('agent: {secret<>: {}}'),
+        ("chosen", "agent"): yapyon.parse('agent<base.agent>: {secret<pass.secret>: {}}'),
+    }
+    tree = compose(yapyon.parse('agent<chosen.agent>: {}'), kinds={"agent"},
+                   lookup=sources.__getitem__)
+    assert tree["agent"]["secret"].label == ("pass", "secret")
 
 
 def test_compact_dialect_source_preserves_deferred_endpoints(tmp_path):

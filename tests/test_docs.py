@@ -78,6 +78,14 @@ def test_schema_gate_rejects_retired_fields():
             _assert_known_fields(tree, "broken example")
 
 
+def test_schema_gate_checks_agent_secret_fields_against_the_secret_component():
+    valid = yapyon.parse('agent<base.agent>: {secret<>: {root: "team", entry: "shared/key"}}')
+    _assert_known_fields(valid, "secret overrides")
+    invalid = yapyon.parse('agent<base.agent>: {secret<>: {token_file: "retired"}}')
+    with pytest.raises(AssertionError, match=r"unknown field secret.token_file"):
+        _assert_known_fields(invalid, "unknown secret field")
+
+
 def test_fence_scanner_skips_other_languages_without_consuming_prose():
     source = "```bash\npg --help\n```\nprose:\n```yapyon\nname: \"scout\"\n```\n"
     assert fenced_blocks(source) == ['name: "scout"\n']
@@ -115,8 +123,7 @@ def schema_fields():
     fields = set()
     for kind in KIND_DIRS:
         fields.update(_field_names(load_preset(("base", kind))[kind], kind))
-    # Secret choice belongs to agent persistence, not the abstract base preset.
-    return fields | {"agent.secret"}
+    return fields
 
 
 def documented_fields():
@@ -151,7 +158,7 @@ def test_reference_heading_depth_keeps_nested_fields_distinct():
 
 def _assert_known_fields(tree, description):
     """Parsing alone must not certify an ignored, retired setting."""
-    allowed = schema_fields() | {"agent.secret.entry"}
+    allowed = schema_fields()
 
     def visit(handle, kind, prefix):
         mapping = _mapping(handle)
@@ -161,7 +168,7 @@ def _assert_known_fields(tree, description):
             path = f"{prefix}.{key}"
             assert path in allowed, f"{description} sets unknown field {path}"
             value = mapping[key]
-            if kind == "agent" and key in {"persona", "harness"}:
+            if kind == "agent" and key in {"persona", "harness", "secret"}:
                 visit(value, key, key)
             elif key in {"mind", "verify", "secret"}:
                 visit(value, kind, path)
@@ -196,7 +203,7 @@ def _load_agent_example(tree, description, tmp_path):
     _assert_known_fields(tree, description)
     store = AgentStore(tmp_path / "example-store")
     # Resolution does not execute the manager. This also exercises keyed examples.
-    store.configure(secret_backend="pass", secret_root="docs")
+    store.configure(defaults={"secret": {"backend": "pass", "root": "docs"}})
     store.create("doc_example", tree)
     result = store.load("doc_example")
     _assert_rendered(result)
@@ -224,6 +231,24 @@ def test_documented_config_parses_and_agent_examples_resolve(name, index, block,
         store.root.mkdir()
         store.registry_path.write_text(block, encoding="utf-8")
         assert store.settings["format"] == tree.resolve()["format"]
+
+
+@pytest.mark.parametrize("fragment,backend,entry,fetch", [
+    ('entry: "shared/team-key"', "pass", "shared/team-key", "pass show shared/team-key"),
+    ('secret<gopass.secret>', "gopass", "personal/keys/doc_example",
+     "gopass show -o personal/keys/doc_example"),
+])
+def test_reference_secret_examples_resolve_selected_backend_and_complete_entry(
+        fragment, backend, entry, fetch, tmp_path):
+    matches = [block for name, _, block in BLOCKS
+               if name == "CONFIG_REFERENCE.md" and fragment in block]
+    assert len(matches) == 1
+    result = _load_agent_example(yapyon.parse(matches[0]), fragment, tmp_path)
+    secret = result["agent"]["secret"]
+    assert secret["name"] == backend
+    assert secret["entry"] == entry
+    assert secret["fetch"] == fetch
+    assert result["runtime"]["secret_backend"]["name"] == "pass"
 
 
 def test_shipped_example_is_a_complete_agent_document(tmp_path):

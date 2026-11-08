@@ -4,6 +4,7 @@
 
 runtime<>:
   agent_path<>: {}        # Agent config path; supplied by invocation.
-  secret_backend<>: {}    # Password manager for every agent's key; {} = none.
+  defaults<>: {}          # Default values (set by config / environment / system)
+  secret_backend<>: {}    # Default password manager for every agent's key; {} = none.
 
 agent<>: {}

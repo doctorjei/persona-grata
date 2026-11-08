@@ -16,7 +16,7 @@ KIND_DIRS = {
     "persona": "personas",
     "harness": "harnesses",
     "dialect": "dialects",
-    "secret": "secret",
+    "secret": "secrets",
 }
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 
@@ -111,6 +111,11 @@ def compose(tree, *, kinds=None, lookup=load_preset, max_fills=1000):
                 filler = lookup(label)
             except FileNotFoundError as exc:
                 raise _slot_error(slot, f"preset {'.'.join(label)!r} not found: {exc}") from exc
+            if label[1] == "agent":
+                agent = filler["agent"] if isinstance(filler, yapyon.Tree) else filler
+                if (agent.kind == "mapping" and "secret" in agent and agent["secret"].kind == "slot"
+                        and not agent["secret"].label and "secret" not in slot.overrides):
+                    slot.merge(yapyon.parse("secret<>: {}"))
             slot.fill(filler)
             if isinstance(filler, yapyon.Tree):
                 result.warnings.extend(filler.warnings)

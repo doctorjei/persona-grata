@@ -4,7 +4,6 @@ import contextlib
 import copy
 from dataclasses import dataclass, field
 import fcntl
-import json
 import os
 from pathlib import Path
 
@@ -19,8 +18,18 @@ from . import yapyon_io as yio
 
 
 FORMAT = "agents-yapyon-v0.1"
-COMPONENT_DIRS = {**KIND_DIRS, "secret": "secrets"}
-BACKENDS = frozenset({"pass", "gopass", "prs"})
+COMPONENT_DIRS = KIND_DIRS
+DEFAULTS_PATH = DATA_DIR / "agent_store-defaults.cfg"
+
+
+def _overlay(base, overrides):
+    result = copy.deepcopy(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _overlay(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
 
 
 def default_store():
@@ -71,25 +80,38 @@ class AgentStore:
 
     @staticmethod
     def _defaults():
-        return {"format": FORMAT, "secret_backend": None, "secret_root": "agents",
-                "agents": {}, "env_add": [], "env_allow": sorted(yapyon.STANDARD_ENV)}
+        return read_record(DEFAULTS_PATH)
 
-    def _read(self):
+    def _read_overrides(self):
         if not self.registry_path.exists():
-            return self._defaults()
-        data = read_record(self.registry_path)
+            return {}
+        source = read_text(self.registry_path)
+        if all(not line.strip() or line.lstrip().startswith("#") for line in source.splitlines()):
+            return {}
+        data = yapyon.loads_record(source, source=str(self.registry_path))
         if not isinstance(data, dict):
             raise ValueError("agent_store.cfg must be a mapping")
+        return data
+
+    def _read(self):
+        return self._validate_settings(_overlay(self._defaults(), self._read_overrides()))
+
+    def _validate_settings(self, data):
         unknown = data.keys() - self._defaults().keys()
         if unknown:
             raise ValueError("unknown store settings: " + ", ".join(sorted(unknown)))
-        data = {**self._defaults(), **data}
         if data["format"] != FORMAT:
             raise ValueError(f"unsupported agent store format: {data['format']!r}")
-        if data["secret_backend"] is not None and (
-                not isinstance(data["secret_backend"], str) or data["secret_backend"] not in BACKENDS):
-            raise ValueError("secret_backend must be pass, gopass, prs, or None")
-        _entry(data["secret_root"], allow_empty=True)
+        defaults = data["defaults"]
+        if not isinstance(defaults, dict) or set(defaults) != {"secret"}:
+            raise ValueError("defaults must contain only secret settings")
+        secret = defaults["secret"]
+        if not isinstance(secret, dict) or set(secret) != {"backend", "root"}:
+            raise ValueError("defaults.secret must contain backend and root")
+        backend = secret["backend"]
+        if backend is not None:
+            validate_id(backend, "secret backend")
+        _entry(secret["root"])
         for key in ("env_allow", "env_add"):
             if not isinstance(data[key], list) or not all(
                     isinstance(item, str) and item.isascii() and item.replace("_", "a").isalnum()
@@ -116,7 +138,14 @@ class AgentStore:
         return data
 
     def _write(self, data):
-        write_record(data, self.registry_path, overwrite=True)
+        ordered = {key: value for key, value in data.items() if key not in {"env_add", "env_allow"}}
+        ordered.update((key, data[key]) for key in ("env_add", "env_allow") if key in data)
+        write_record(ordered, self.registry_path, overwrite=True)
+
+    def _write_agents(self, data):
+        overrides = self._read_overrides()
+        overrides["agents"] = data["agents"]
+        self._write(overrides)
 
     @contextlib.contextmanager
     def _locked(self):
@@ -135,28 +164,18 @@ class AgentStore:
         return copy.deepcopy(self._read())
 
     def configure(self, **changes):
-        allowed = {"secret_backend", "secret_root", "env_allow", "env_add"}
-        if changes.keys() - allowed:
-            raise ValueError("only secret and environment settings may be configured")
+        if changes.keys() - {"defaults", "env_allow", "env_add"}:
+            raise ValueError("only default and environment settings may be configured")
         with self._locked():
-            data = self._read()
-            proposed = {**data, **changes}
-            if proposed["secret_backend"] is not None and (
-                    not isinstance(proposed["secret_backend"], str) or proposed["secret_backend"] not in BACKENDS):
-                raise ValueError("secret_backend must be pass, gopass, prs, or None")
-            _entry(proposed["secret_root"], allow_empty=True)
-            for key in ("env_allow", "env_add"):
-                value = proposed[key]
-                if not isinstance(value, list) or not all(
-                        isinstance(item, str) and item.isascii() and item.replace("_", "a").isalnum()
-                        and not item[0].isdigit() for item in value):
-                    raise ValueError(f"{key} must be a list of environment variable names")
+            overrides = _overlay(self._read_overrides(), changes)
+            proposed = self._validate_settings(_overlay(self._defaults(), overrides))
             components = {}
-            if proposed["secret_backend"]:
-                self._materialize((proposed["secret_backend"], "secret"), components=components)
+            backend = proposed["defaults"]["secret"]["backend"]
+            if backend is not None:
+                self._materialize((backend, "secret"), components=components)
             written = self._save_components(components)
             try:
-                self._write(proposed)
+                self._write(overrides)
             except BaseException:
                 for path in written:
                     path.unlink(missing_ok=True)
@@ -244,7 +263,7 @@ class AgentStore:
             if kind not in agent:
                 raise ValueError(f"agent requires a {kind} definition")
             if filled and agent[kind].kind != "mapping":
-                raise ValueError(f"agent {kind} must be a filled mapping")
+                raise ValueError(f"agent {kind} has a required slot or is not a filled mapping")
         if "format" in agent:
             marker = agent["format"]
             if marker.kind != "scalar" or marker.value != FORMAT:
@@ -259,14 +278,20 @@ class AgentStore:
         agent = tree["agent"]
         self._validate_agent(agent)
         agent.merge(yio.value_tree({"name": name}))
+        backend = data["defaults"]["secret"]["backend"]
         if "secret" not in agent:
-            agent.merge(yio.value_tree({"secret": {} if data["secret_backend"] else None}))
+            agent.merge(yapyon.parse("secret<>: {}"))
+        secret = agent["secret"]
+        if secret.kind == "slot" and not secret.label and backend is None:
+            if secret.overrides.keys():
+                raise ValueError("agent needs a secret backend; select one or explicitly set secret: None")
+            secret.replace(yio.value_tree(None))
         tree.to_source()
         for slot in tree.slots():
             if slot.label:
                 self._materialize(slot.label, components=components)
-        if data["secret_backend"]:
-            self._materialize((data["secret_backend"], "secret"), components=components)
+        if data["defaults"]["secret"]["backend"]:
+            self._materialize((data["defaults"]["secret"]["backend"], "secret"), components=components)
         return tree
 
     def _assemble(self, definition, name, path, data, *, components=None):
@@ -275,31 +300,24 @@ class AgentStore:
         def lookup(label):
             return components[label] if label in components else self._stored_lookup(label)
 
-        tree = read_document(DATA_DIR / "global.tmpl")
-        tree["agent"].fill(definition["agent"])
-        tree = compose(tree, lookup=lookup)
-        agent = tree["agent"]
+        backend = data["defaults"]["secret"]["backend"]
+        manager = (compose(lookup((backend, "secret")), lookup=lookup)["secret"]
+                   if backend is not None else yapyon.parse("{}").root)
+        assembled = compose(definition, lookup=lookup)
+        agent = assembled["agent"]
         self._validate_agent(agent, filled=True)
         agent.merge(yio.value_tree({"name": name}))
-        secret = agent["secret"] if "secret" in agent else None
+        if "secret" not in agent:
+            agent.merge(yapyon.parse("secret<>: {}"))
+        secret = agent["secret"]
+        if secret.kind == "slot" and not secret.label:
+            if backend is None and secret.overrides.keys():
+                raise ValueError("agent needs a secret backend; select one or explicitly set secret: None")
+            secret.fill(manager if backend is not None else yio.value_tree(None))
         keyless = secret is None or (secret.kind == "scalar" and secret.value is None)
-        backend = data["secret_backend"]
-        if not keyless and not backend:
-            raise ValueError("agent needs a secret backend; run --setup or explicitly set secret: None")
-        manager = yapyon.parse("{}")
-        if not keyless:
-            if secret.kind != "mapping":
-                raise ValueError("agent.secret must be None or a mapping with an optional entry")
-            if set(secret.keys()) - {"entry"}:
-                raise ValueError("agent.secret supports only entry; backend belongs to the store")
-            if "entry" not in secret:
-                secret.merge(yio.value_tree({"entry": path.name}))
-            manager = yapyon.merge(lookup((backend, "secret"))["secret"])
-            prefix = data["secret_root"].rstrip("/")
-            prefix = prefix + "/" if prefix else ""
-            spelling = json.dumps(prefix.replace("{", "{{").replace("}", "}}") + "{agent.secret.entry}")
-            manager["entry"].replace(yapyon.parse("y" + spelling))
-        else:
+        if not keyless and secret.kind != "mapping":
+            raise ValueError("agent.secret must be a backend mapping or None")
+        if keyless:
             agent.merge(yio.value_tree({"secret": None}))
             if "harness" in agent and agent["harness"].kind == "mapping":
                 agent["harness"].merge(yio.value_tree({"auth_var": ""}))
@@ -310,9 +328,12 @@ class AgentStore:
                 auth = harness["auth_var"]
                 if auth.kind == "scalar" and auth.value in env:
                     env[auth.value].remove()
+        tree = read_document(DATA_DIR / "global.tmpl")
         tree["runtime"].fill(yapyon.parse("{}"))
         tree["runtime"]["agent_path"].replace(yio.value_tree(str(path)))
+        tree["runtime"]["defaults"].fill(yio.value_tree(data["defaults"]))
         tree["runtime"]["secret_backend"].fill(manager)
+        tree["agent"].fill(agent)
         remaining = tree.slots()
         if remaining:
             slot = remaining[0]
@@ -345,9 +366,19 @@ class AgentStore:
             raise ValueError("agent harness requires a name")
         if harness.get("path") != str(path / "harness"):
             raise ValueError("harness.path must be the agent directory's harness subdirectory")
-        if result["runtime"]["secret_backend"]:
-            _entry(result["agent"]["secret"]["entry"])
-            _entry(result["runtime"]["secret_backend"]["entry"])
+        secret = resolved_agent["secret"]
+        if secret is not None:
+            if not isinstance(secret, dict):
+                raise ValueError("agent.secret must be a backend mapping or None")
+            _entry(secret.get("entry"))
+            if "root" in secret:
+                _entry(secret["root"])
+            for key in ("name", "fetch"):
+                if not isinstance(secret.get(key), str) or not secret[key]:
+                    raise ValueError(f"agent.secret.{key} must be a nonempty string")
+            for key in ("store", "probe", "check"):
+                if key in secret and secret[key] is not None and not isinstance(secret[key], str):
+                    raise ValueError(f"agent.secret.{key} must be a string or None")
         return result
 
     def _check_new_agent(self, name, destination, data):
@@ -433,7 +464,7 @@ class AgentStore:
                     if updating:
                         del data["agents"][prepared.previous_name]
                     data["agents"][prepared.name] = {"path": str(path)}
-                    self._write(data)
+                    self._write_agents(data)
             except BaseException:
                 if saved:
                     if updating:
@@ -473,7 +504,7 @@ class AgentStore:
             data["agents"][new] = record
             write_document(tree, path / "agent.cfg", overwrite=True)
             try:
-                self._write(data)
+                self._write_agents(data)
             except BaseException:
                 write_document(previous, path / "agent.cfg", overwrite=True)
                 raise
@@ -485,7 +516,7 @@ class AgentStore:
             if name not in data["agents"]:
                 raise ValueError(f"unknown agent {name!r}")
             del data["agents"][name]
-            self._write(data)
+            self._write_agents(data)
 
     def load(self, name):
         path = self.locate(name)
