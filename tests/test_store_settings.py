@@ -58,6 +58,16 @@ def test_explicit_default_values_and_empty_lists_are_not_pruned(store):
     assert read_overrides(store)["env_allow"] == []
 
 
+def test_none_root_is_preserved_as_an_explicit_sparse_override(store):
+    settings = store.configure(defaults={"secret": {"root": None}})
+    assert settings["defaults"]["secret"] == {"backend": None, "root": None}
+    assert read_overrides(store) == {"defaults": {"secret": {"root": None}}}
+    store = AgentStore(store.root)
+    assert store.settings["defaults"]["secret"]["root"] is None
+    store.configure(env_allow=[])
+    assert read_overrides(store) == {"defaults": {"secret": {"root": None}}, "env_allow": []}
+
+
 def test_registry_updates_do_not_materialize_default_settings(store, tmp_path):
     store.root.mkdir()
     store.registry_path.write_text(yapyon.dumps({
@@ -106,7 +116,7 @@ def test_builtin_default_backend_materializes_only_its_source(store):
 @pytest.mark.parametrize("source", [
     "None\n", "[]\n", '"not a registry"\n',
     "defaults: None\n", "defaults: {secret: None}\n",
-    'defaults: {secret: {root: ""}}\n', "defaults: {secret: {root: None}}\n",
+    'defaults: {secret: {root: ""}}\n',
     'defaults: {secret: {root: "../bad"}}\n',
     "defaults: {secret: {backend: []}}\n", "defaults: {secret: {backend: True}}\n",
     'defaults: {secret: {backend: "../bad"}}\n',
@@ -122,11 +132,12 @@ def test_invalid_registry_values_are_not_silently_treated_as_missing(store, sour
     assert store.registry_path.read_text() == source
 
 
-def test_invalid_configure_does_not_replace_existing_overrides(store):
+@pytest.mark.parametrize("root", ["", 0, False, [], {}])
+def test_invalid_configure_does_not_replace_existing_overrides(store, root):
     store.configure(env_allow=[])
     before = store.registry_path.read_bytes()
     with pytest.raises(ValueError):
-        store.configure(defaults={"secret": {"root": None}})
+        store.configure(defaults={"secret": {"root": root}})
     assert store.registry_path.read_bytes() == before
 
 

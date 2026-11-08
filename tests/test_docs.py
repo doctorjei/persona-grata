@@ -237,6 +237,7 @@ def test_documented_config_parses_and_agent_examples_resolve(name, index, block,
     ('entry: "shared/team-key"', "pass", "shared/team-key", "pass show shared/team-key"),
     ('secret<gopass.secret>', "gopass", "personal/keys/doc_example",
      "gopass show -o personal/keys/doc_example"),
+    ('root: None', "pass", "doc_example", "pass show doc_example"),
 ])
 def test_reference_secret_examples_resolve_selected_backend_and_complete_entry(
         fragment, backend, entry, fetch, tmp_path):

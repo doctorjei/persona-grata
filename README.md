@@ -11,8 +11,8 @@ Install via pipx, uv, or your other favorite package management tool:
 `pipx install persona-grata`
 
 Python 3.11 or newer is required. Install the harness you intend to run separately.
-For keyed agents, install and initialize a supported password manager: `pass`, `gopass`, or `prs`.
-For example, on Debian/Ubuntu:
+For keyed agents, install and initialize a password manager. Bundled backends support `pass`,
+`gopass`, and `prs`; custom backends can be defined in the agent store. For example, on Debian/Ubuntu:
 
 ```bash
 sudo apt install pass gnupg
@@ -37,9 +37,10 @@ After setup, open a new shell or source your shell's startup file, then run the 
 scout [arguments]
 ```
 
-Use `pg --setup` to configure the store's password manager. Credential verification is optional;
-for keyed agents, `--verify` requests a live check that may incur provider charges. Setup does not
-prove that a server or harness accepts the generated configuration.
+Use `pg --setup` to configure the store's default password manager. An agent document can select a
+different backend. Credential verification is optional; for keyed agents, `--verify` requests a live
+check that may incur provider charges. Setup does not prove that a server or harness accepts the
+generated configuration.
 
 ## Overview: Agents, Personas, & Harnesses
 
@@ -125,8 +126,9 @@ agent<base.agent>:
 pg --create orion.cfg
 ```
 
-`secret: None` explicitly makes this example keyless. Remove that setting to use the store's
-configured manager, or supply an entry as described in the [Custom Agent Guide](CUSTOM_AGENTS.md).
+`secret: None` explicitly makes this example keyless. Remove that setting to inherit the store's
+configured default backend, or select a backend and complete entry as described in the
+[Custom Agent Guide](CUSTOM_AGENTS.md#credentials-updates--export).
 The shipped [agents-example.yaml](agents-example.yaml) is also a single-agent **yapyon** document;
 copy it to a `.cfg` or `.tmpl` file before using it with the CLI.
 
@@ -138,7 +140,7 @@ copy it to a `.cfg` or `.tmpl` file before using it with the CLI.
 | `--update` | Update an existing registered agent |
 | `--remove`, `-r` | Remove an agent's registration, wrapper, and generated files |
 | `--export FILE` | Export an agent document without installing it |
-| `--setup` | Configure the store's secret backend |
+| `--setup` | Configure the store's default secret backend |
 | `--get-secret NAME` | Print NAME's credential to stdout (sensitive; read-only) |
 | `--backend NAME` | Select `pass`, `gopass`, or `prs` during setup |
 | `--secret-root ROOT` | Set the manager-entry prefix during setup |
@@ -162,17 +164,20 @@ entries are retained.
 ## Agent Store & Configuration
 
 The root is selected by `--store`, otherwise `AGENT_STORE_DIR`, then `$XDG_CONFIG_HOME/agents`,
-then `~/.config/agents`. `<agent-store>/agent_store.cfg` contains store settings and the name-to-path
-registry. Installed agents have `<agent-directory>/agent.cfg` and `<agent-directory>/harness/`.
+then `~/.config/agents`. `<agent-store>/agent_store.cfg` contains explicit store-setting overrides
+and the name-to-path registry; packaged defaults supply omitted settings. Default credential settings
+are `defaults.secret.backend` and `defaults.secret.root`. Installed agents have
+`<agent-directory>/agent.cfg` and `<agent-directory>/harness/`.
 Composed components used by agents are stored in `<agent-store>/personas/`, `<agent-store>/harnesses/`,
 `<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
 copied into the store.
 
-Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.4 or newer within the 0.6 series), not YAML:
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.5 or newer within the 0.6 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
 Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
-a whole value without converting it to text. Runtime supplies the agent directory and secret backend;
-agent documents cannot set `agent.path`.
+a whole value without converting it to text. Runtime supplies the agent directory, effective store
+defaults, and default secret backend; credential operations use each agent's selected backend.
+Agent documents cannot set `agent.path`.
 
 Saved documents preserve unfinished slots and expressions, but their comments and layout are
 normalized. Safe merges are compacted; necessary slot/composition layers remain explicit. Source
@@ -181,12 +186,12 @@ See the [Config Reference Manual](CONFIG_REFERENCE.md) for fields, store layout,
 
 ### Security
 
-Tokens are held by the store's selected password manager, not copied into plaintext token files or
+Tokens are held by each agent's selected password manager, not copied into plaintext token files or
 `.secret_path` pointers. Generated wrappers fetch the key at launch; arrange for the manager to work
 without an unattended passphrase prompt. `--token FILE` is an input source, not a file-token backend.
-An explicit keyless agent neither fetches nor stores a key. If no secret setting or backend is
-configured at creation, keyless operation is saved and reported; configuring a backend later does
-not silently give that existing agent credentials. An explicit secret mapping requires a backend.
+An explicit keyless agent neither fetches nor stores a key. If no secret setting or default backend is
+configured at creation, keyless operation is saved and reported; configuring a default backend later
+does not silently give that existing agent credentials. Named and inline backend selections remain explicit.
 
 No live harness or paid-endpoint validation is implied by the bundled presets or offline tests.
 

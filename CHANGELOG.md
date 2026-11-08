@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.7] — 2026-11-08
+
+### Added
+
+- Per-agent credential backends: inherit the store default, select a named/custom component, or supply
+  a complete inline backend. Credential preflight, imports, wrappers, and `--get-secret` use that selection.
+- `secret.root: None` omits the entry prefix, using the registered agent name alone. This remains
+  distinct from `secret: None`, which makes an agent keyless.
+
+### Changed
+
+- **Breaking:** store defaults now use nested `defaults.secret.backend` and `defaults.secret.root`;
+  the former flat `secret_backend` and `secret_root` settings are not accepted.
+- Ship canonical store defaults in `data/agent_store-defaults.cfg`. Registry writes preserve explicit
+  nested overrides, including `None` and empty lists, without copying inherited defaults into the file.
+- Derive default credential entries from the configured root and registered agent name, not the
+  directory basename. Explicit complete-entry overrides are used verbatim, without an extra prefix.
+  Renaming follows the name-derived expression but does not move password-manager records.
+- Require yapyon 0.6.5 or newer within the 0.6 series for native conditional entry expressions.
+
+### Fixed
+
+- Check the plural `data/secrets/` preset path and canonical defaults asset in CI and release wheel guards.
+
 ## [0.0.6] — 2026-11-07
 
 ### Added

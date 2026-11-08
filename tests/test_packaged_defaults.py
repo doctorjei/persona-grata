@@ -3,8 +3,11 @@
 from fnmatch import fnmatch
 from importlib.resources import files
 from pathlib import Path
+import re
+import shlex
 import tomllib
 
+import pytest
 import yapyon
 
 
@@ -43,3 +46,15 @@ def test_sdist_manifest_includes_canonical_defaults():
         and any(fnmatch("agent_store-defaults.cfg", pattern) for pattern in rule[2:])
         for rule in rules
     )
+
+
+@pytest.mark.skipif(not (ROOT / ".git").exists(), reason="workflow checks require a repository checkout")
+@pytest.mark.parametrize("workflow", ["ci.yml", "release.yml"])
+def test_workflow_wheel_gate_references_existing_runtime_assets(workflow):
+    source = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+    gate = re.search(r"for f in (.*?);\s*do", source, re.S)
+    assert gate, f"{workflow} must check the wheel's runtime assets"
+    assets = shlex.split(gate.group(1).replace("\\\n", " "))
+    assert {"secrets/pass.secret.tmpl", "agent_store-defaults.cfg"} <= set(assets)
+    for asset in assets:
+        assert (ROOT / "src" / "persona_grata" / "data" / asset).is_file(), asset

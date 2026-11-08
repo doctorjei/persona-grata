@@ -35,6 +35,36 @@ def test_default_backend_and_full_entry_are_inherited_by_agent(store, backend, t
     assert saved["agent"]["secret"].label == ()
 
 
+@pytest.mark.parametrize("backend", ["pass", "gopass", "prs"])
+def test_none_default_root_uses_agent_name_without_becoming_keyless(store, backend):
+    store.configure(defaults={"secret": {"backend": backend, "root": None}})
+    store.create("scout", make_agent("minimax", "claude"))
+    resolved = AgentStore(store.root).load("scout")
+    assert resolved["runtime"]["defaults"]["secret"]["root"] is None
+    for secret in (resolved["agent"]["secret"], resolved["runtime"]["secret_backend"]):
+        assert secret["name"] == backend
+        assert secret["root"] is None
+        assert secret["entry"] == "scout"
+        assert secret["fetch"].endswith(" scout")
+        assert secret["store"].endswith(" scout")
+    assert resolved["agent"]["harness"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
+
+
+@pytest.mark.parametrize("selection", ["secret<>", "secret<pass.secret>"])
+def test_none_agent_root_overrides_nonempty_default(store, selection):
+    store.configure(defaults={"secret": {"backend": "pass", "root": "team/keys"}})
+    path = store.create("scout", agent_with_secret(f"{selection}: {{root: None}}"))
+    source = yapyon.parse_file(path / "agent.cfg")
+    assert source["agent"]["secret"].overrides["root"].value is None
+    resolved = AgentStore(store.root).load("scout")
+    secret = resolved["agent"]["secret"]
+    assert secret["root"] is None
+    assert secret["entry"] == "scout"
+    assert secret["fetch"] == "pass show scout"
+    assert secret["store"] == "pass insert -m -f scout"
+    assert resolved["runtime"]["secret_backend"]["entry"] == "team/keys/scout"
+
+
 def test_explicit_backend_overrides_runtime_default(store):
     store.configure(defaults={"secret": {"backend": "pass"}})
     store.create("scout", agent_with_secret('secret<gopass.secret>: {root: "other/keys"}'))
@@ -53,27 +83,31 @@ def test_explicit_backend_does_not_require_a_store_default(store):
     assert resolved["agent"]["secret"]["entry"] == "agents/scout"
 
 
-def test_complete_entry_override_is_not_prefixed_again(store):
-    store.configure(defaults={"secret": {"backend": "pass", "root": "unused/prefix"}})
+@pytest.mark.parametrize("root", ["unused/prefix", None])
+def test_complete_entry_override_is_not_prefixed_again(store, root):
+    store.configure(defaults={"secret": {"backend": "pass", "root": root}})
     for name in ("one", "two"):
         store.create(name, agent_with_secret('secret<>: {entry: "shared/team-key"}'))
         secret = store.load(name)["agent"]["secret"]
         assert secret["entry"] == "shared/team-key"
         assert secret["fetch"] == "pass show shared/team-key"
         assert secret["store"] == "pass insert -m -f shared/team-key"
-        assert store.load(name)["runtime"]["secret_backend"]["entry"] == f"unused/prefix/{name}"
+        expected = f"{root}/{name}" if root is not None else name
+        assert store.load(name)["runtime"]["secret_backend"]["entry"] == expected
 
 
-def test_root_override_rebinds_inherited_entry_and_commands(store):
-    store.configure(defaults={"secret": {"backend": "pass"}})
+@pytest.mark.parametrize("root", ["agents", None])
+def test_root_override_rebinds_inherited_entry_and_commands(store, root):
+    store.configure(defaults={"secret": {"backend": "pass", "root": root}})
     store.create("scout", agent_with_secret('secret<>: {root: "per-agent"}'))
     secret = store.load("scout")["agent"]["secret"]
     assert secret["entry"] == "per-agent/scout"
     assert secret["fetch"] == "pass show per-agent/scout"
 
 
-def test_explicit_keyless_stays_keyless_despite_default_backend(store):
-    store.configure(defaults={"secret": {"backend": "pass"}})
+@pytest.mark.parametrize("root", ["agents", None])
+def test_explicit_keyless_stays_keyless_despite_default_backend(store, root):
+    store.configure(defaults={"secret": {"backend": "pass", "root": root}})
     store.create("local", agent_with_secret('secret: None'))
     resolved = store.load("local")
     assert resolved["agent"]["secret"] is None
@@ -160,12 +194,14 @@ def test_default_backend_changes_affect_inherited_agents_not_explicit_ones(store
     assert store.load("fixed")["agent"]["secret"]["name"] == "pass"
 
 
-def test_name_default_follows_rename_but_explicit_entry_does_not(store):
-    store.configure(defaults={"secret": {"backend": "pass"}})
+@pytest.mark.parametrize("root", ["agents", None])
+def test_name_default_follows_rename_but_explicit_entry_does_not(store, root):
+    store.configure(defaults={"secret": {"backend": "pass", "root": root}})
     directory = store.create("before", make_agent("minimax", "claude"))
     store.rename("before", "after")
     assert store.locate("after") == directory
-    assert store.load("after")["agent"]["secret"]["entry"] == "agents/after"
+    expected = f"{root}/after" if root is not None else "after"
+    assert store.load("after")["agent"]["secret"]["entry"] == expected
     store.update("after", agent_with_secret('secret<>: {entry: "agents/before"}'))
     store.rename("after", "final")
     assert store.load("final")["agent"]["secret"]["entry"] == "agents/before"

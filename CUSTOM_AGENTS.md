@@ -147,10 +147,19 @@ inside a y-string.
 
 ## Credentials, Updates, & Export
 
-`agent.secret: None` is explicitly keyless. A secret mapping may set `entry` instead of the agent
-directory's basename; the store's `secret_root` prefix (default `"agents"`) applies to either. The store
-chooses one manager (`pass`, `gopass`, or `prs`). It fetches credentials at launch and never creates a plaintext token
-backend or `.secret_path` pointer. Keep the manager usable without an unattended passphrase prompt.
+`agent.secret: None` is explicitly keyless. `secret<>: {}` inherits the store's default backend;
+`secret<gopass.secret>: {}` selects a named backend independently. Bundled backends support `pass`,
+`gopass`, and `prs`; custom components work too. A plain `secret: {...}` mapping must supply a complete
+inline backend. Use slot overrides to change only a backend's root or entry.
+
+The default entry is the secret root (normally `"agents"`) plus the registered agent name, not its
+directory's basename. `secret<>: {root: None}` omits the prefix without making the agent keyless.
+An explicit `secret<>: {entry: "shared/key"}` is the complete entry, used verbatim without another
+prefix. See [Secret Components & Installation](CONFIG_REFERENCE.md#secret-components--installation)
+for the backend fields and path rules.
+
+Wrappers fetch credentials through the agent's selected backend at launch; PG never creates a plaintext
+token backend or `.secret_path` pointer. Keep the manager usable without an unattended passphrase prompt.
 
 ```bash
 pg orion                          # Show the saved document; no changes
@@ -168,8 +177,9 @@ replacing an export destination, but never the installed `agent.cfg` itself. Sav
 normalized yapyon: comments and original layout are not retained, and unsafe deferred merges are
 refused. Keep hand-authored source files separately if their formatting matters.
 
-Runtime owns `runtime.agent_path` and `runtime.secret_backend`; do not supply them in agent
-files. `agent.path` is disallowed. Use `--path` at creation and the name-to-path registry afterward.
+Runtime owns `runtime.agent_path`, `runtime.defaults`, and `runtime.secret_backend`; do not supply
+them in agent files. The runtime backend is a default; credential operations use the resolved
+`agent.secret`. `agent.path` is disallowed. Use `--path` at creation and the name-to-path registry afterward.
 There are no legacy schema shims; former persona-matrix files must be rewritten.
 
 See the [Config Reference Manual](CONFIG_REFERENCE.md) for the complete field list and store layout.

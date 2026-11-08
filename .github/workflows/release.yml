@@ -63,7 +63,7 @@ jobs:
                    agents/minimax_claude.agent.tmpl personas/base.persona.tmpl \
                    personas/kimi.persona.tmpl harnesses/claude.harness.tmpl \
                    harnesses/codex.harness.tmpl dialects/chat.dialect.tmpl \
-                   secret/pass.secret.tmpl; do
+                   secrets/pass.secret.tmpl agent_store-defaults.cfg; do
             grep -q "persona_grata/data/$f" wheel.txt || { echo "missing from wheel: $f"; exit 1; }
           done
       - name: Verify the installed console scripts run

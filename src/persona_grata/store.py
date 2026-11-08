@@ -111,7 +111,8 @@ class AgentStore:
         backend = secret["backend"]
         if backend is not None:
             validate_id(backend, "secret backend")
-        _entry(secret["root"])
+        if secret["root"] is not None:
+            _entry(secret["root"])
         for key in ("env_allow", "env_add"):
             if not isinstance(data[key], list) or not all(
                     isinstance(item, str) and item.isascii() and item.replace("_", "a").isalnum()
@@ -371,7 +372,7 @@ class AgentStore:
             if not isinstance(secret, dict):
                 raise ValueError("agent.secret must be a backend mapping or None")
             _entry(secret.get("entry"))
-            if "root" in secret:
+            if secret.get("root") is not None:
                 _entry(secret["root"])
             for key in ("name", "fetch"):
                 if not isinstance(secret.get(key), str) or not secret[key]:
