@@ -74,15 +74,18 @@ def test_codex_native_env_key_depends_on_auth_var_not_secret(secret_source, auth
 
 def test_codex_output_copy_filters_only_none_without_changing_raw_native_data():
     tree = _codex_tree(["m1"], auth_var="")
-    tree["agent"]["harness"]["config_store"].merge(yapyon.parse('''optional: None
-false_value: False
-zero_value: 0
-empty_text: ""
-empty_list: []
-empty_mapping: {}
-nested:
-  optional: None
-  retained: ""
+    tree.merge(yapyon.parse('''agent:
+  harness:
+    config_store:
+      optional: None
+      false_value: False
+      zero_value: 0
+      empty_text: ""
+      empty_list: []
+      empty_mapping: {}
+      nested:
+        optional: None
+        retained: ""
 '''))
     harness = tree.resolve()["agent"]["harness"]
     raw = harness["config_store"]

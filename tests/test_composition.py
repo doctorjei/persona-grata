@@ -47,7 +47,11 @@ agent<agent.minimax_claude>: {}
     unsaved = compose(first)
     assert continued.to_source() == unsaved.to_source()
     assert {slot.path for slot in continued.slots()} == {("runtime",), ("agent", "secret")}
-    assert continued["agent"]["persona"]["mind"]["model_list"][0].value
+    for tree in (continued, unsaved):
+        tree["runtime"].fill(yapyon.parse('agent_path: "/example/agent"\ndefaults: {}'))
+        tree["agent"]["secret"].fill(yapyon.parse("None"))
+    assert continued.resolve() == unsaved.resolve()
+    assert continued.resolve()["agent"]["persona"]["mind"]["model_list"][0]
 
 
 def test_no_environment_or_contract_evaluation(monkeypatch, tmp_path):
@@ -203,11 +207,12 @@ def test_default_secret_pass_through_does_not_override_a_preset_backend():
     assert tree["agent"]["secret"].label == ("secret", "pass")
 
 
-def test_compact_dialect_source_preserves_deferred_endpoints(tmp_path):
+def test_guarded_dialect_source_preserves_deferred_endpoints(tmp_path):
     path = write_document(compose_preset("dialect", "anthropic"), tmp_path / "dialect.tmpl")
-    assert "|" not in path.read_text()
+    source = path.read_text()
+    assert 'api_uri: y"{endpoint}"' in source
+    assert "runtime.defaults.dialect.api_uri!" in source
     restored = yapyon.parse_file(path)
-    assert restored["dialect"]["api_uri"].lexeme == 'y"{endpoint}"'
     for endpoint in ("https://first.example", "https://second.example/anthropic"):
         tree = yapyon.parse(f'endpoint: {endpoint!r}\ndialect<>: {{}}')
         tree["dialect"].fill(restored["dialect"])
@@ -231,16 +236,15 @@ def test_harness_source_keeps_one_inherited_protocol(tmp_path, name):
     assert restored.to_source() == source
 
 
-def test_compact_persona_slot_overrides_remain_deferred(tmp_path):
+def test_guarded_persona_slot_overrides_remain_deferred(tmp_path):
     path = write_document(compose_preset("persona", "minimax"), tmp_path / "persona.tmpl")
     source = path.read_text()
-    assert "|" not in source
+    assert "runtime.defaults.persona.mind.dialects!" in source
+    assert "anthropic<dialect.anthropic>:" in source
+    assert 'y"{endpoint}/anthropic"' in source
     for endpoint in ("https://first.example", "https://second.example/custom"):
         restored = yapyon.parse_file(path)
         mind = restored["persona"]["mind"]
-        anthropic = mind["dialects"]["anthropic"]
-        assert anthropic.label == ("dialect", "anthropic")
-        assert anthropic.overrides["api_uri"].lexeme == 'y"{endpoint}/anthropic"'
         mind["endpoint"].replace(yapyon.parse(repr(endpoint)))
         resolved = compose(restored).resolve()["persona"]["mind"]["dialects"]
         assert resolved["anthropic"]["api_uri"] == endpoint + "/anthropic"

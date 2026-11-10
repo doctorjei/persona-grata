@@ -2,7 +2,7 @@
 
 Persona-Grata composes one agent from a persona, a harness, their dialects, and an optional
 password-manager configuration. Configuration is [yapyon](https://pypi.org/project/yapyon/),
-requiring yapyon 0.6.5 or newer within the 0.6 series; `.cfg` and `.tmpl` describe the same document format.
+requiring yapyon 0.6.6 or newer within the 0.6 series; `.cfg` and `.tmpl` describe the same document format.
 
 ## Agent Store
 
@@ -86,24 +86,22 @@ not discard the backend. Lists and data-valued settings use the authored whole v
 `None`, empty collections and default-equal values are retained. PG saves explicit settings and agent
 records without copying inherited defaults; registry comments and layout are normalized on writes.
 
-The current source-defaults binder accepts reusable fields recursively: persona `mind`, harness
-settings, dialect/verification settings and secret locator/operation settings. Entity `name`/`desc`,
-`defaults.agent`, `runtime` and unknown specification fields are not eligible. Native `config_store`
-and `wrapper_env` are data values, so their data keys are not extra specification fields. The current
-binder broadcasts generic dialect defaults into enabled records, below protocol-specific
-`defaults.persona.mind.dialects` values; disabled `None` dialects remain disabled. This is adapter
-behavior, not an operation supplied by yapyon merging.
+Reusable defaults cover persona `mind`, harness settings, dialect/verification settings and secret
+locator/operation settings. Entity `name`/`desc`, `defaults.agent`, `runtime` and unknown specification
+fields are not eligible. Native `config_store` and `wrapper_env` are data values; their keys are not
+extra specification fields. Generic `defaults.dialect` values are contributed by inheriting dialect
+templates, not broadcast into unrelated inline records. Protocol-specific values use
+`defaults.persona.mind.dialects`; disabled `None` dialects remain disabled.
 
 Precedence is specification defaults, then store-config defaults, then explicit file settings.
-A reused file has no special status. The current binder fills omitted fields while expressions remain
-deferred; supplied leaves/lists/native data block those fallbacks. Empty schema records permit
-missing-field defaults, while explicit record replacement (`:=`) resets lower defaults. Replacing
-that binder with ordinary yapyon defaults/source composition is not implemented yet.
+A reused file has no special status. Defaults and source use ordinary yapyon composition: `:` combines
+compatible values, including lists and native mappings; `:=` replaces or clears a complete field.
+A guarded reference such as `(runtime.defaults.secret.root!)` contributes nothing when absent,
+leaving lower contributions intact. Present `None`, false, zero and empty values are not absence.
 
-PG still refuses some valid deferred schema-record shapes/computed keys. These are known defects
-preventing full core conformance, not permitted format restrictions. Native computed keys and
-comprehensions retain ordinary yapyon behavior. All current standard elements and required yapyon
-built-ins are core requirements.
+Defaults remain deferred through composition, including record copies and computed schema keys.
+All current standard elements and required yapyon built-ins remain core requirements; these checks
+are not final candidate-standard adoption or native-client/provider acceptance.
 
 The specification supplies omitted model-list/active/subagent fallbacks, fixed harness path,
 preferred-first protocol and selected secret root/entry. It does not invent component identities,

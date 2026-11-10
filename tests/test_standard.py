@@ -68,9 +68,10 @@ def test_minimal_definition_gets_only_specified_fallbacks(tmp_path):
 
 
 def test_recursive_defaults_bind_missing_fields_before_expressions(tmp_path):
-    defaults = {"persona": {"mind": {"context_size": 200000, "model_list": ["first", "second"]}},
-                "harness": {"auth_var": "EXTERNAL_KEY", "wrapper_env": {"EXTERNAL_KEY": ""}},
-                "dialect": {"verify": {"headers": ["X-Test: one"]}}}
+    defaults = {"persona": {"mind": {
+                    "context_size": 200000, "model_list": ["first", "second"],
+                    "dialects": {"chat": {"verify": {"headers": ["X-Test: one"]}}}}},
+                "harness": {"auth_var": "EXTERNAL_KEY", "wrapper_env": {"EXTERNAL_KEY": ""}}}
     store, _ = seed(tmp_path, defaults=defaults)
     agent = store.load("scout")["agent"]
     assert agent["persona"]["mind"]["context_size"] == 200000
@@ -86,10 +87,10 @@ def test_explicit_none_empty_lists_and_native_data_block_defaults(tmp_path):
   persona:
     mind:
       context_size: None
-      model_list: []
+      model_list:= []
   harness:
-    config_store: {}
-    wrapper_env: {}
+    config_store:= {}
+    wrapper_env:= {}
 ''')).to_source()
     defaults = {"persona": {"mind": {"context_size": 200000, "model_list": ["default"]}},
                 "harness": {"config_store": {"native": True}, "wrapper_env": {"LANG": "C"}}}
@@ -108,7 +109,7 @@ def test_source_record_reset_does_not_resurrect_defaults(tmp_path):
         store.load("scout")
 
 
-def test_generic_and_per_protocol_dialect_defaults_and_disabled_values(tmp_path):
+def test_per_protocol_defaults_do_not_implicitly_broadcast_generic_values(tmp_path):
     source = yapyon.merge(yapyon.parse(BARE), yapyon.parse('''agent:
   persona:
     mind:
@@ -122,8 +123,7 @@ def test_generic_and_per_protocol_dialect_defaults_and_disabled_values(tmp_path)
                                                    "responses": {"api_uri": "http://unused"}}}}}
     store, _ = seed(tmp_path, source, defaults=defaults)
     dialects = store.load("scout")["agent"]["persona"]["mind"]["dialects"]
-    assert dialects["chat"]["verify"] == {
-        "headers": ["X-All: yes"], "body": "specific", "key_header": "X-Auth:"}
+    assert dialects["chat"]["verify"] == {"body": "specific", "key_header": "X-Auth:"}
     assert dialects["responses"] is None
 
 
@@ -249,7 +249,8 @@ def test_create_retains_dependencies_and_changed_defaults_remain_live(tmp_path):
     assert before["harness"]["auth_var"] == "API_KEY"
     store.configure(defaults={"persona": {"mind": {"context_size": 200000}}})
     after = store.load("scout")["agent"]
-    assert after["persona"]["mind"]["context_size"] is None
+    assert before["persona"]["mind"]["context_size"] is None
+    assert after["persona"]["mind"]["context_size"] == 200000
     assert (path / "agent.cfg").read_text() == source
 
 

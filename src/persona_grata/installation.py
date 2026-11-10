@@ -402,6 +402,7 @@ def _native_paths(agent_path, harness):
         _fail("Harness config directory must be the registered agent's harness/ directory.")
     if config_dir.exists() and not config_dir.is_dir():
         _fail(f"Harness config directory is occupied by a file: {config_dir}.")
+    owner = config_dir / _OWNER_FILE
     config_file = harness.get("config_file")
     if config_file is not None and not isinstance(config_file, str):
         _fail("Native config file must be a relative filename, None, or an empty string.")
@@ -411,6 +412,9 @@ def _native_paths(agent_path, harness):
         if "\x00" in config_file or filename.is_absolute() or ".." in filename.parts:
             _fail("Native config file must be relative to harness/ without NUL or '..' segments.")
         native_file = config_dir / filename
+        resolved_native, resolved_owner = native_file.resolve(), owner.resolve()
+        if resolved_native == resolved_owner or resolved_owner in resolved_native.parents:
+            _fail("Native config file must not collide with the installation ownership marker.")
         if native_file == config_dir:
             _fail("Native config file must name a file inside the agent's harness/ directory.")
         for parent in native_file.parents:
@@ -420,7 +424,6 @@ def _native_paths(agent_path, harness):
                 _fail(f"Native config parent is occupied by a file: {parent}.")
         if native_file.exists() and not native_file.is_file():
             _fail(f"Native config path is occupied by a directory: {native_file}.")
-    owner = config_dir / _OWNER_FILE
     if config_dir.exists() and any(config_dir.iterdir()):
         try:
             valid = json.loads(_read_regular_text(
@@ -655,11 +658,15 @@ def prepare_installation(resolved, *, name=None, token=None, verify=False, insta
         shell_content = (existing + "\n\n" if existing else "") + wrapper
     key, fresh = None, False
     if manager:
-        _secret_probe(manager)
-        for action in ("fetch", "store"):
+        def require_command(action):
             argv = _command_argv(manager, action)
             if shutil.which(argv[0]) is None:
                 _fail(f"Secret backend cannot run its {action} command (executable missing).")
+
+        _secret_probe(manager)
+        require_command("fetch")
+        if token is not None:
+            require_command("store")
         exists = _check_secret_store(manager, writing=token is not None)
         if token is not None:
             key = _validate_token(token)
@@ -667,6 +674,7 @@ def prepare_installation(resolved, *, name=None, token=None, verify=False, insta
             key = None if exists is False else _fetch_secret(manager)
         fresh = token is not None or key is None
         if key is None:
+            require_command("store")
             key = _prompt_token(agent.get("desc") or name)
             _check_secret_store(manager, writing=True)
         if verify:

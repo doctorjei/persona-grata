@@ -17,7 +17,7 @@ def protocol_tree(preferences, available):
         "persona": {"mind": {"dialects": available}},
         "dialect": "outer_binding",
     })
-    harness = compose_preset("harness", "codex")
+    harness = compose_preset("harness", "_BUILTIN_")
     tree.merge(harness["harness"]["protocol"], at=("protocol",))
     return tree
 

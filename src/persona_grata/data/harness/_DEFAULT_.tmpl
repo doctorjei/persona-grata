@@ -6,8 +6,13 @@
 # the winning dialect -- which is both the compatibility answer ("no match" = cannot be built) and
 # the key that locates its URIs.
 
-harness<harness._BUILTIN_>: {}
-#  path: ()!                 # Path to custom harness settings files
-#  wrapper_env: ()!          # Env. vars exported by shell wrapper (conf)
-#  supported_dialects: ()!   # Protocols spoken, best first <REQUIRED>
-#  protocol: ()!
+harness<harness._BUILTIN_>:
+  path: (runtime.defaults.harness.path!)
+  auth_var: (runtime.defaults.harness.auth_var!)
+  path_var: (runtime.defaults.harness.path_var!)
+  wrapper_env: (runtime.defaults.harness.wrapper_env!)
+  config_file: (runtime.defaults.harness.config_file!)
+  config_store: (runtime.defaults.harness.config_store!)
+  content: (runtime.defaults.harness.content!)
+  supported_dialects: (runtime.defaults.harness.supported_dialects!)
+  protocol: (runtime.defaults.harness.protocol!)

@@ -177,18 +177,18 @@ during explicit creation/setup; reads never fall back to the package catalog or 
 
 Packaged sources use the same namespace layout: `data/<kind>/<name>.tmpl`. Each category has a
 `_BUILTIN_` template for its baseline and a `_DEFAULT_` forwarding template. Concrete presets inherit
-through `_DEFAULT_`; those placeholders do not yet implement the planned config-default wiring.
+through `_DEFAULT_`, whose guarded references contribute configured defaults when present.
 These are ordinary source documents, not extra precedence tiers or instructions to distribute settings.
 
-Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.5 or newer within the 0.6 series), not YAML:
+Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.6 or newer within the 0.6 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
 Named slots such as `persona<persona.kimi>` compose presets; `(persona.mind.model_list)` copies
 a whole value without converting it to text. Runtime supplies the agent directory, effective store
 defaults, and default secret backend; credential operations use each agent's selected backend.
 Agent documents cannot set `agent.path`.
 
-This development version targets candidate profile `agents-yapyon-v0.6.5`; known deferred-record
-binding defects still prevent full core conformance (see the Config Reference Manual). Older markers,
+This version targets candidate profile `agents-yapyon-v0.6.5`. Defaults use ordinary
+yapyon composition; candidate-standard adoption remains separate from these checks. Older markers,
 including `v0.1`, are not aliases and are not migrated automatically. Defaults are specification,
 then store-config, then file settings; a reused base is ordinary file source, not a fourth tier.
 Keyless selection does not clear authored authentication references or prove a native client can

@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.0.8] — 2026-11-10
+
 ### Changed
 
 - **Breaking:** implement candidate `agents-yapyon-v0.6.5`; old markers are rejected without aliases
@@ -15,13 +17,14 @@ All notable changes to this project are documented here. The format follows
   uses `env_vars.from_host` / `env_vars.additions`.
 - Resolve qualified includes from one configured shared root (`persona.kimi` → `shared/persona/kimi.tmpl`),
   including nested/deeper labels and retained agent inheritance. Reads do not use the package catalog.
-- Apply recursive specification-defined defaults before final resolution, below all file settings.
-  Preserve explicit empty/None data, source replacements, identity exclusions and deferred expressions.
+- Require yapyon 0.6.6 or newer within the 0.6 series for guarded reference contributions (`!`).
+- Compose specification-defined defaults through ordinary yapyon merges below file settings. `:` combines
+  compatible values; `:=` replaces or clears them. Preserve explicit None, empty data and deferred source.
 - Preserve authored authentication references/native entries regardless of secret selection. Storage
   accepts shell words; wrapper installation refuses names it cannot expose safely.
 - Native `config_file` values are relative to the fixed harness directory.
 - Package templates under singular `data/<kind>/<name>.tmpl` paths. Concrete presets inherit through
-  `_DEFAULT_` into `_BUILTIN_`; the `_DEFAULT_` templates currently forward without config-value overrides.
+  `_DEFAULT_` into `_BUILTIN_`; guarded `_DEFAULT_` references forward configured values when present.
 
 ### Fixed
 
@@ -32,10 +35,12 @@ All notable changes to this project are documented here. The format follows
   Compose the model-test fixture through the full inheritance chain and fail exhaustive discovery if a
   bundled category or persona/harness inventory is empty.
 
-### Known Issues
-
-- Full candidate-profile conformance remains incomplete. Some valid deferred schema-record bindings
-  are rejected, and the current defaults binder has not yet been replaced by ordinary yapyon composition.
+- Accept deferred component/record values and computed schema keys without premature shape restrictions.
+- Preserve exact Unicode literal keys, including distinct composed and decomposed spellings.
+- Prevent shared-catalog containment and native ownership-marker collisions; retain preparation-time
+  source signatures and use one source baseline during rename.
+- Scope native-data registry overlay rules to harness fields, not identically named protocols.
+- Allow read-only secret backends when an existing credential requires no write operation.
 
 ## [0.0.7] — 2026-11-08
 

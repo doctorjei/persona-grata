@@ -16,21 +16,21 @@ def environment(env_defaults=None):
 
 def value_tree(value):
     """Represent plain configuration literals, never deferred source fragments."""
-    if isinstance(value, dict):
-        tree = yapyon.parse("{}")
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("configuration keys must be strings")
-            tree.merge(value_tree(item), at=(key,))
-        return tree
-    if isinstance(value, list):
-        tree = yapyon.parse(repr([None] * len(value)))
-        for index, item in enumerate(value):
-            tree[index].replace(value_tree(item))
-        return tree
-    if value is not None and not isinstance(value, (str, bool, int)):
-        raise TypeError(f"cannot store {type(value).__name__} as configuration")
-    return yapyon.parse(repr(value))
+    def validate(item):
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    raise TypeError("configuration keys must be strings")
+                validate(child)
+        elif isinstance(item, list):
+            for child in item:
+                validate(child)
+        elif item is not None and not isinstance(item, (str, bool, int)):
+            raise TypeError(f"cannot store {type(item).__name__} as configuration")
+
+    validate(value)
+    # Record serialization preserves literal keys rather than folding path names.
+    return yapyon.parse(yapyon.dumps(value))
 
 
 def load(path):

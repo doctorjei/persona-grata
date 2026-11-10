@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "until": "2026-12-10",
+  "by": "persona_grata",
+  "note": "Reviewed only two historical release catalog paths and one store-relative shared/ example; these do not assert directories in the current checkout. Preserve released history and reject new or changed findings.",
+  "coverage": {
+    "check:retired:entries": [
+      "chat",
+      "responses",
+      "verify.check_uri"
+    ],
+    "check:tree-version:entries": [],
+    "claims:gates": [
+      "kinemata check",
+      "kinemata claims",
+      "kinemata parity",
+      "pytest -q"
+    ],
+    "parity:tree-version:members:disjoint": [
+      "0.0.8"
+    ]
+  },
+  "populations": {
+    "registry:retired": "fceb84992aed0939",
+    "registry:tree-version": "18c26a58761110da"
+  },
+  "findings": [
+    {
+      "registry": "claims",
+      "entry": "claim:path",
+      "antipattern": "data/secrets/",
+      "path": "CHANGELOG.md",
+      "text": "- Check the plural `data/secrets/` preset path and canonical defaults asset in CI and release wheel guards."
+    },
+    {
+      "registry": "claims",
+      "entry": "claim:path",
+      "antipattern": "personas/",
+      "path": "CHANGELOG.md",
+      "text": "`secret_backend`; `agent.path` is refused. Composed, in-use components are stored under `personas/`,"
+    },
+    {
+      "registry": "claims",
+      "entry": "claim:path",
+      "antipattern": "shared/",
+      "path": "CUSTOM_AGENTS.md",
+      "text": "replacement component presets. Every named include is rooted at `paths.shared`, normally `shared/`:"
+    }
+  ]
+}

@@ -70,8 +70,9 @@ Specification defaults are below store defaults, which are below every explicitl
 A reused base is not another defaults tier; its explicit values remain file settings.
 
 Bundled templates use singular `data/<kind>/<name>.tmpl` paths. `_BUILTIN_` holds each category's
-baseline; `_DEFAULT_` currently forwards to it without config-value overrides. Concrete presets inherit
-through that ordinary source chain. The placeholders do not yet implement template-based config defaults.
+baseline; `_DEFAULT_` forwards configured values through guarded references. A missing reference
+contributes nothing, preserving the built-in value. Concrete presets inherit through this ordinary
+source chain; explicit file overrides retain ordinary `:` and `:=` semantics.
 
 ## Protocol Mounts
 
