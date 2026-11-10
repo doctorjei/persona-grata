@@ -17,7 +17,7 @@
       "pytest -q"
     ],
     "parity:tree-version:members:disjoint": [
-      "0.0.8"
+      "0.0.9.dev0"
     ]
   },
   "populations": {
