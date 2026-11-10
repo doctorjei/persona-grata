@@ -5,16 +5,16 @@
 # uniform with codex and goose. The /v1/messages path and the anthropic-version header this file
 # used to spell out by hand *were* the dialect; they live in dialect.anthropic.yaml now.
 
-harness<base.harness>:
+harness<harness.base>:
   name: "claude"
   desc: "Claude Code"
   supported_dialects: ["anthropic"]
   auth_var: "ANTHROPIC_AUTH_TOKEN"
   path_var: "CLAUDE_CONFIG_DIR"
-  config_file: y"{path}/settings.json"
+  config_file: "settings.json"
   config_store:
     env:
-      ANTHROPIC_AUTH_TOKEN: "no-token-required"
+#      ANTHROPIC_AUTH_TOKEN: "no-token-required"
       ANTHROPIC_BASE_URL: y"{persona.mind.dialects[protocol].api_uri}"
       CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1"
       ANTHROPIC_MODEL: (persona.mind.model_active)

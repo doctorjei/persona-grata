@@ -3,11 +3,11 @@
 #
 
 agent:
-  format: "agents-yapyon-v0.1"
+  format: "agents-yapyon-v0.6.5"
   name: "base_agent"              # The agent's name
   desc: y"{name}"                 # Short Description (defaults to name)
 
   # Slots; these **must be filled** before being resolved.
-  persona<>: {}                   # Persona slot, e.g. persona<kimi.persona> <REQUIRED>
-  harness<>: {}                   # Harness slot, e.g. harness<claude.harness> <REQUIRED>
+  persona<>: {}                   # Persona slot, e.g. persona<persona.kimi> <REQUIRED>
+  harness<>: {}                   # Harness slot, e.g. harness<harness.claude> <REQUIRED>
   secret<>: {}                    # Backend secret store (tokens, passwords) <REQUIRED>

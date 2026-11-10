@@ -23,14 +23,3 @@ harness:
 ### the negotiated dialect, a harness that declares none has no URI, nothing to verify against and
 ### an empty protocol -- it cannot function. The pairing is refused by name before resolution
 ### rather than left to fail as an unresolvable template.
-
-### `auth_var` is settled against the persona before resolution. With no token it is cleared to ""
-### -- not to None, which y-strings render as the *string* "None" -- so nothing
-### declares a variable that will never be set: codex renders it as `env_key` and would refuse to
-### start against a name the wrapper is guaranteed not to assign.
-###
-### The converse case needs no setting. A harness that will not start unless the variable is set,
-### key or no key, writes a stand-in straight into its own `config_store.env` (claude does); that
-### entry is dropped whenever the persona *does* have a token, so it can never shadow the real key
-### the wrapper exports. The preset says where, the persona says whether -- and "whether" is
-### already `token`, so there is nothing new to declare.

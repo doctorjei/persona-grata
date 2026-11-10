@@ -5,12 +5,12 @@
 # Responses but works over Chat, so the winning protocol depends on the persona it is bound to,
 # and `wire_api` names whichever it got.
 
-harness<base.harness>:
+harness<harness.base>:
   name: "codex"
   desc: "Codex CLI"
   path_var: "CODEX_HOME"
   supported_dialects: ["responses", "chat"]    # ordered by preference
-  config_file: y"{path}/config.toml"
+  config_file: "config.toml"
 
   config_store:
     model: (persona.mind.model_active)
@@ -22,14 +22,14 @@ harness<base.harness>:
         name: y"{persona.desc}"
         wire_api: y"{protocol}"
         base_url: y"{persona.mind.dialects[protocol].api_uri}"
-        env_key: y"{auth_var}"
+        env_key: (auth_var) if auth_var != "" else None
 
     models: {
       model_id: {provider: (persona.name), remote_model_id: (model_id)}
       for model_id in persona.mind.model_list
     }
 
-  content: y"{config_store.__as_toml__()}"
+  content: y"{config_store.__not_none__().__as_toml__()}"
 
 
 # For later: http_headers = { "X-Account-Id" = "your-account-id", "User-Agent" = "Codex" }
