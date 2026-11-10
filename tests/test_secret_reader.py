@@ -66,7 +66,7 @@ def test_get_secret_prints_only_credential_without_writes(reader_store, monkeypa
 def test_get_secret_uses_agent_backend_not_runtime_default(reader_store, monkeypatch, capsys, selection):
     if selection == "gopass":
         definition = yapyon.merge(make_agent("minimax", "claude"), yapyon.parse(
-            'agent:\n  secret<gopass.secret>:\n    entry: "shared/key"\n'))
+            'agent:\n  secret<secret.gopass>:\n    entry: "shared/key"\n'))
         expected_name = "gopass"
     else:
         definition = yapyon.merge(make_agent("minimax", "claude"), yio.value_tree({

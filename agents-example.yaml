@@ -1,16 +1,16 @@
 # This is yapyon, not YAML. Copy to orion.cfg for `pg --create orion.cfg`.
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "orion"
   desc: "Orion Toolkit"
   secret: None
-  persona<base.persona>:
+  persona<persona._DEFAULT_>:
     name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
       model_list: ["alpha-3-on"]
       model_active: "alpha-3-on"
       dialects:
-        anthropic<anthropic.dialect>:
+        anthropic<dialect.anthropic>:
           api_uri: y"{endpoint}/anthropic_api"
         responses:= None
-  harness<claude.harness>: {}
+  harness<harness.claude>: {}

@@ -12,8 +12,9 @@ import yapyon
 
 import persona_grata as pg
 from persona_grata.cli import _parser, _validate_options
-from persona_grata.composition import KIND_DIRS, load_preset
+from persona_grata.composition import KIND_DIRS, compose
 from persona_grata.store import AgentStore
+from persona_grata.schema import DEFAULT_FIELDS
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,16 +73,16 @@ def test_each_configuration_guide_contains_a_complete_agent_example():
 
 
 def test_schema_gate_rejects_retired_fields():
-    for retired in ('  path: "/tmp/agent"\n', '  persona<base.persona>:\n    mind:\n      model: "retired"\n'):
-        tree = yapyon.parse('agent<base.agent>:\n' + retired)
+    for retired in ('  path: "/tmp/agent"\n', '  persona<persona._DEFAULT_>:\n    mind:\n      model: "retired"\n'):
+        tree = yapyon.parse('agent<agent._DEFAULT_>:\n' + retired)
         with pytest.raises(AssertionError, match="unknown field"):
             _assert_known_fields(tree, "broken example")
 
 
 def test_schema_gate_checks_agent_secret_fields_against_the_secret_component():
-    valid = yapyon.parse('agent<base.agent>: {secret<>: {root: "team", entry: "shared/key"}}')
+    valid = yapyon.parse('agent<agent._DEFAULT_>: {secret<>: {root: "team", entry: "shared/key"}}')
     _assert_known_fields(valid, "secret overrides")
-    invalid = yapyon.parse('agent<base.agent>: {secret<>: {token_file: "retired"}}')
+    invalid = yapyon.parse('agent<agent._DEFAULT_>: {secret<>: {token_file: "retired"}}')
     with pytest.raises(AssertionError, match=r"unknown field secret.token_file"):
         _assert_known_fields(invalid, "unknown secret field")
 
@@ -120,9 +121,20 @@ def _field_names(handle, prefix):
 
 
 def schema_fields():
-    fields = set()
-    for kind in KIND_DIRS:
-        fields.update(_field_names(load_preset(("base", kind))[kind], kind))
+    fields = {f"agent.{key}" for key in ("format", "name", "desc", "persona", "harness", "secret")}
+
+    def walk(schema, prefix):
+        for key, shape in schema.items():
+            if prefix == "secret" and key == "backend":
+                continue
+            field = f"{prefix}.{key}"
+            fields.add(field)
+            if isinstance(shape, dict):
+                walk(shape, field)
+
+    for kind, schema in DEFAULT_FIELDS.items():
+        fields.update({f"{kind}.name", f"{kind}.desc"})
+        walk(schema, kind)
     return fields
 
 
@@ -130,7 +142,7 @@ def documented_fields():
     return set(re.findall(r"^#{3,4} `([A-Za-z0-9_.]+)`", read("CONFIG_REFERENCE.md"), re.M))
 
 
-def test_reference_fields_match_current_base_templates():
+def test_reference_fields_match_complete_standard_schema():
     actual = schema_fields()
     documented = documented_fields()
     assert actual == documented, (
@@ -214,6 +226,12 @@ def _load_agent_example(tree, description, tmp_path):
 
 
 @pytest.mark.parametrize("name,index,block", BLOCKS, ids=BLOCK_IDS)
+def test_documented_config_composes_without_resolution(name, index, block):
+    tree = compose(yapyon.parse(block, source=f"{name} block {index}"))
+    assert not any(slot.label for slot in tree.slots())
+
+
+@pytest.mark.parametrize("name,index,block", BLOCKS, ids=BLOCK_IDS)
 def test_documented_config_parses_and_agent_examples_resolve(name, index, block, tmp_path):
     assert not _PLAIN_REFERENCE.findall(block), f"{name} block {index} has a literal reference"
     tree = yapyon.parse(block)
@@ -235,7 +253,7 @@ def test_documented_config_parses_and_agent_examples_resolve(name, index, block,
 
 @pytest.mark.parametrize("fragment,backend,entry,fetch", [
     ('entry: "shared/team-key"', "pass", "shared/team-key", "pass show shared/team-key"),
-    ('secret<gopass.secret>', "gopass", "personal/keys/doc_example",
+    ('secret<secret.gopass>', "gopass", "personal/keys/doc_example",
      "gopass show -o personal/keys/doc_example"),
     ('root: None', "pass", "doc_example", "pass show doc_example"),
 ])
@@ -283,8 +301,8 @@ def table_column(document, header):
 @pytest.mark.parametrize("header,kind", [("Persona", "persona"), ("Harness", "harness")])
 def test_readme_lists_current_shipped_presets(header, kind):
     directory = ROOT / "src" / "persona_grata" / "data" / KIND_DIRS[kind]
-    shipped = {path.name.removesuffix(f".{kind}.tmpl")
-               for path in directory.glob(f"*.{kind}.tmpl") if path.name != f"base.{kind}.tmpl"}
+    shipped = {path.stem for path in directory.glob("*.tmpl")
+               if path.stem not in {"_BUILTIN_", "_DEFAULT_"}}
     assert shipped, f"no current {kind} presets found"
     documented = table_column("README.md", header)
     assert documented == shipped, (

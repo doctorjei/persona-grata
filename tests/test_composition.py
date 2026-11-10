@@ -12,24 +12,24 @@ from persona_grata.composition import (
 )
 
 
-@pytest.mark.parametrize("name", ["base", "pass", "gopass", "prs"])
-def test_secret_presets_load_from_plural_directory(name):
+@pytest.mark.parametrize("name", ["_BUILTIN_", "_DEFAULT_", "pass", "gopass", "prs"])
+def test_secret_presets_load_from_singular_directory(name):
     tree = compose_preset("secret", name)
-    assert KIND_DIRS["secret"] == "secrets"
+    assert KIND_DIRS["secret"] == "secret"
     assert tree["secret"].kind == "mapping"
     assert not tree.slots()
     assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
 
 
 def test_selected_category_keeps_unfilled_slots_and_expressions(tmp_path):
-    original = load_preset(("minimax_claude", "agent"))
+    original = load_preset(("agent", "minimax_claude"))
     before = original.to_source()
     tree = compose(original, kinds={"agent"})
     assert original.to_source() == before
     assert tree["agent"].kind == "mapping"
     assert tree["agent"]["desc"].lexeme == 'y"{name}"'
     assert {slot.label for slot in tree.slots()} == {
-        ("minimax", "persona"), ("claude", "harness"), ()}
+        ("persona", "minimax"), ("harness", "claude"), ()}
     path = write_document(tree, tmp_path / "agent.cfg")
     restored = yapyon.parse_file(path)
     assert restored.to_source() == tree.to_source()
@@ -39,7 +39,7 @@ def test_selected_category_keeps_unfilled_slots_and_expressions(tmp_path):
 
 def test_continue_composition_after_reload():
     initial = yapyon.parse('''runtime<>: {}
-agent<minimax_claude.agent>: {}
+agent<agent.minimax_claude>: {}
 ''')
     first = compose(initial, kinds={"agent"})
     restored = yapyon.parse(first.to_source())
@@ -66,43 +66,43 @@ computed:
 
 def test_inheritance_cycle_reports_source():
     definitions = {
-        ("a", "persona"): yapyon.parse('persona<b.persona>: {}', source="a.tmpl"),
-        ("b", "persona"): yapyon.parse('persona<a.persona>: {}', source="b.tmpl"),
+        ("persona", "a"): yapyon.parse('persona<persona.b>: {}', source="a.tmpl"),
+        ("persona", "b"): yapyon.parse('persona<persona.a>: {}', source="b.tmpl"),
     }
     with pytest.raises(ValueError, match="preset inheritance cycle") as error:
-        compose(definitions[("a", "persona")], lookup=definitions.__getitem__)
-    assert "a.persona" in str(error.value) and "b.persona" in str(error.value)
+        compose(definitions[("persona", "a")], lookup=definitions.__getitem__)
+    assert "persona.a" in str(error.value) and "persona.b" in str(error.value)
     assert ".tmpl:" in str(error.value)
 
 
 def test_recursive_children_are_bounded():
-    template = yapyon.parse('agent:\n  child<recursive.agent>: {}')
-    with pytest.raises(ValueError, match="exceeds 5 fills"):
-        compose(yapyon.parse('agent<recursive.agent>: {}'),
+    template = yapyon.parse('agent:\n  child<agent.recursive>: {}')
+    with pytest.raises(ValueError, match="preset inheritance cycle"):
+        compose(yapyon.parse('agent<agent.recursive>: {}'),
                 lookup=lambda label: template, max_fills=5)
 
 
 def test_abstract_and_unselected_slots_do_not_lookup():
-    tree = yapyon.parse('runtime<>: {}\nagent<missing.agent>: {}')
+    tree = yapyon.parse('runtime<>: {}\nagent<agent.missing>: {}')
     result = compose(tree, kinds=set(), lookup=lambda label: pytest.fail("looked up"))
-    assert [slot.label for slot in result.slots()] == [(), ("missing", "agent")]
+    assert [slot.label for slot in result.slots()] == [(), ("agent", "missing")]
 
 
 def test_missing_preset_reports_slot_location(tmp_path):
-    tree = yapyon.parse('agent<absent.agent>: {}', source="custom.cfg")
-    with pytest.raises(ValueError, match=r"custom.cfg:1:.*absent.agent.*not found"):
+    tree = yapyon.parse('agent<agent.absent>: {}', source="custom.cfg")
+    with pytest.raises(ValueError, match=r"custom.cfg:1:.*agent.absent.*not found"):
         compose(tree, lookup=partial(load_preset, data_dir=tmp_path))
 
 
 @pytest.mark.parametrize("name", ["../x", "not-safe", "é", "9bad", "default", "x" * 65])
 def test_invalid_preset_id_never_reaches_filesystem(name):
     with pytest.raises(ValueError):
-        load_preset((name, "persona"))
+        load_preset(("persona", name))
 
 
 @pytest.mark.parametrize("label", [("a", "missing"), ("a",), ("a", "persona", "extra")])
-def test_invalid_labels(label):
-    with pytest.raises(ValueError):
+def test_valid_unbundled_labels_have_no_private_catalog_fallback(label):
+    with pytest.raises(FileNotFoundError):
         load_preset(label)
 
 
@@ -161,23 +161,31 @@ def test_failed_atomic_replace_preserves_destination(monkeypatch, tmp_path):
     assert list(tmp_path.iterdir()) == [path]
 
 
-PRESETS = [(kind, path.name.removesuffix(f".{kind}.tmpl"))
+PRESETS = [(kind, path.stem)
            for kind, directory in KIND_DIRS.items()
-           for path in sorted((DATA_DIR / directory).glob(f"*.{kind}.tmpl"))]
+           for path in sorted((DATA_DIR / directory).glob("*.tmpl"))]
+assert {kind for kind, _ in PRESETS} == set(KIND_DIRS), "a bundled category has no discovered templates"
 
 
 @pytest.mark.parametrize("kind,name", PRESETS)
 def test_every_bundled_category_composes_and_persists(kind, name):
-    tree = compose_preset(kind, name)
+    if kind == "agent" and name in {"_BUILTIN_", "_DEFAULT_"}:
+        tree = compose(yapyon.parse(f'''agent<agent.{name}>:
+  persona<>: {{}}
+  harness<>: {{}}
+  secret<>: {{}}
+'''), kinds={kind})
+    else:
+        tree = compose_preset(kind, name)
     assert tree[kind].kind == "mapping"
-    assert not any(slot.label and slot.label[1] == kind for slot in tree.slots())
+    assert not any(slot.label and slot.label[0] == kind for slot in tree.slots())
     assert yapyon.parse(tree.to_source()).to_source() == tree.to_source()
 
 
 @pytest.mark.parametrize("secret", ["secret: None", "secret<>: {}"])
 def test_agent_lookup_can_return_a_branch_handle(secret):
     source = yapyon.parse('name: "example"\n' + secret)
-    tree = compose(yapyon.parse('agent<base.agent>: {}'), lookup=lambda label: source.root)
+    tree = compose(yapyon.parse('agent<agent.base>: {}'), lookup=lambda label: source.root)
     assert tree["agent"]["name"].value == "example"
     if source["secret"].kind == "slot":
         assert [slot.path for slot in tree.slots()] == [("agent", "secret")]
@@ -187,12 +195,12 @@ def test_agent_lookup_can_return_a_branch_handle(secret):
 
 def test_default_secret_pass_through_does_not_override_a_preset_backend():
     sources = {
-        ("base", "agent"): yapyon.parse('agent: {secret<>: {}}'),
-        ("chosen", "agent"): yapyon.parse('agent<base.agent>: {secret<pass.secret>: {}}'),
+        ("agent", "base"): yapyon.parse('agent: {secret<>: {}}'),
+        ("agent", "chosen"): yapyon.parse('agent<agent.base>: {secret<secret.pass>: {}}'),
     }
-    tree = compose(yapyon.parse('agent<chosen.agent>: {}'), kinds={"agent"},
+    tree = compose(yapyon.parse('agent<agent.chosen>: {}'), kinds={"agent"},
                    lookup=sources.__getitem__)
-    assert tree["agent"]["secret"].label == ("pass", "secret")
+    assert tree["agent"]["secret"].label == ("secret", "pass")
 
 
 def test_compact_dialect_source_preserves_deferred_endpoints(tmp_path):
@@ -231,7 +239,7 @@ def test_compact_persona_slot_overrides_remain_deferred(tmp_path):
         restored = yapyon.parse_file(path)
         mind = restored["persona"]["mind"]
         anthropic = mind["dialects"]["anthropic"]
-        assert anthropic.label == ("anthropic", "dialect")
+        assert anthropic.label == ("dialect", "anthropic")
         assert anthropic.overrides["api_uri"].lexeme == 'y"{endpoint}/anthropic"'
         mind["endpoint"].replace(yapyon.parse(repr(endpoint)))
         resolved = compose(restored).resolve()["persona"]["mind"]["dialects"]

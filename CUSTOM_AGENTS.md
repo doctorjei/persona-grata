@@ -9,17 +9,17 @@ configuration documents, not endpoint/model command-line flags. Start with an ag
 Save this example as `<working-directory>/orion.cfg`:
 
 ```yapyon
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "orion"
   desc: "Orion Toolkit"
   secret: None
-  persona<base.persona>:
+  persona<persona._DEFAULT_>:
     name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
       model_list: ["alpha-3-on"]
       model_active: "alpha-3-on"
-  harness<claude.harness>: {}
+  harness<harness.claude>: {}
 ```
 
 ```bash
@@ -40,14 +40,14 @@ A named slot selects a preset; its contents override that preset. For example, a
 use the same persona and harness with a different model:
 
 ```yapyon
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "local_review"
   secret: None
-  persona<ollama.persona>:
+  persona<persona.ollama>:
     mind:
       model_list: ["review-model"]
       model_active: "review-model"
-  harness<codex.harness>: {}
+  harness<harness.codex>: {}
 ```
 
 ```bash
@@ -63,7 +63,15 @@ The store saves composed components only when used. It does not install a second
 preset catalog. Installed `<agent-directory>/agent.cfg` uses the same slot format as these examples, and stored
 components allow reloading without the original inheritance files. Explicit source catalogs are a
 Python composition API choice; the CLI does not implicitly search the current directory for
-replacement component presets.
+replacement component presets. Every named include is rooted at `paths.shared`, normally `shared/`:
+`persona.ollama` means `shared/persona/ollama.tmpl`. Deeper labels use the same root. Missing
+stored includes fail during reads; explicit creation/setup may provision packaged components.
+Specification defaults are below store defaults, which are below every explicitly composed file.
+A reused base is not another defaults tier; its explicit values remain file settings.
+
+Bundled templates use singular `data/<kind>/<name>.tmpl` paths. `_BUILTIN_` holds each category's
+baseline; `_DEFAULT_` currently forwards to it without config-value overrides. Concrete presets inherit
+through that ordinary source chain. The placeholders do not yet implement template-based config defaults.
 
 ## Protocol Mounts
 
@@ -71,10 +79,10 @@ A persona declares where it serves each dialect; the harness lists which dialect
 best first. A shared dialect is required. Disable an inherited dialect with `:= None`:
 
 ```yapyon
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "pax"
   secret: None
-  persona<base.persona>:
+  persona<persona._DEFAULT_>:
     name: "pax"
     desc: "Pax Toolkit"
     mind:
@@ -82,13 +90,13 @@ agent<base.agent>:
       model_list: ["pax-model"]
       model_active: "pax-model"
       dialects:
-        anthropic<anthropic.dialect>:
+        anthropic<dialect.anthropic>:
           api_uri: y"{endpoint}/anthropic_api"
           verify:
             check_uri: y"{api_uri}/verify_me"
             key_header: "x-api-key:"
         responses:= None
-  harness<claude.harness>: {}
+  harness<harness.claude>: {}
 ```
 
 These mounts are declarations, not endpoint discovery. For keyed agents, optional `--verify`
@@ -98,24 +106,24 @@ tests do not establish compatibility with a live server or installed harness.
 ## Custom Harness Settings
 
 Override a bundled harness's `config_store` inside its slot. To define a different harness, use
-`harness<base.harness>` and supply its executable name and supported dialects. Put native settings
+`harness<harness._DEFAULT_>` and supply its executable name and supported dialects. Put native settings
 in `config_store`, then serialize them into `content`:
 
 ```yapyon
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "orion_apex"
   secret: None
-  persona<base.persona>:
+  persona<persona._DEFAULT_>:
     name: "orion"
     mind:
       endpoint: "https://api.cybertron.space"
       model_list: ["alpha-3-on"]
       model_active: "alpha-3-on"
-  harness<base.harness>:
+  harness<harness._DEFAULT_>:
     name: "apex"
     supported_dialects: ["chat"]
     path_var: "APEX_HOME"
-    config_file: y"{path}/config.toml"
+    config_file: "config.toml"
     config_store:
       model: (persona.mind.model_active)
       base_url: y"{persona.mind.dialects[protocol].api_uri}"
@@ -126,7 +134,9 @@ The `apex` executable in this example is hypothetical; install and validate your
 Generated files must remain within `<agent-directory>/harness/`. For an environment-driven
 harness, leave `config_file` / `content` unset and set `wrapper_env` instead. `auth_var` names the
 variable that receives the manager-fetched key; do not put a real token into `config_store` or
-`wrapper_env`.
+`wrapper_env`. Keyless selection preserves `auth_var` and authored native fields: inherited or
+explicitly configured external authentication may still be intended. Use an explicit empty
+`auth_var` for an unused variable; the Codex template then omits `env_key` from its output copy.
 
 ## References & Whole Values
 
@@ -141,14 +151,14 @@ models: (persona.mind.model_list)
 ```
 
 References use the surrounding scope; use full paths when crossing components. `{$NAME}` reads an
-environment variable only if permitted by the store's `env_allow` / `env_add` policy. A plain
+environment variable only if permitted by the store's `env_vars.from_host` / `env_vars.additions` policy. A plain
 `"$HOME/agents"` is literal text, not a path expansion. Write `{{` or `}}` for literal braces
 inside a y-string.
 
 ## Credentials, Updates, & Export
 
 `agent.secret: None` is explicitly keyless. `secret<>: {}` inherits the store's default backend;
-`secret<gopass.secret>: {}` selects a named backend independently. Bundled backends support `pass`,
+`secret<secret.gopass>: {}` selects a named backend independently. Bundled backends support `pass`,
 `gopass`, and `prs`; custom components work too. A plain `secret: {...}` mapping must supply a complete
 inline backend. Use slot overrides to change only a backend's root or entry.
 
@@ -180,6 +190,8 @@ refused. Keep hand-authored source files separately if their formatting matters.
 Runtime owns `runtime.agent_path`, `runtime.defaults`, and `runtime.secret_backend`; do not supply
 them in agent files. The runtime backend is a default; credential operations use the resolved
 `agent.secret`. `agent.path` is disallowed. Use `--path` at creation and the name-to-path registry afterward.
-There are no legacy schema shims; former persona-matrix files must be rewritten.
+This development version uses `agents-yapyon-v0.6.5`, not the older `v0.1` profile. There are no
+marker aliases or automatic migrations; retain older stores until an explicit migration is validated.
+Former persona-matrix files must also be rewritten.
 
 See the [Config Reference Manual](CONFIG_REFERENCE.md) for the complete field list and store layout.

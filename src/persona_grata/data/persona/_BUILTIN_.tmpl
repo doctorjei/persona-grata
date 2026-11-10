@@ -1,0 +1,17 @@
+persona:
+  # Not config mutable (only changeable from agent settings files)
+  name: "_DEFAULT_"                      # Persona's name
+  desc: y"{name} persona"                # Short Description
+
+  # Store-config-mutable
+  mind:                                  # Behavior (endpoint, model, etc.)
+    endpoint: None                       # Connection endpoint <REQUIRED>
+    context_size: None                   # Context size (1000000, 1048576...)
+    model_list: []                       # Models (first is default model)
+    model_active: model_list.__get__(0)  # Default active model name
+    model_subagent: (model_active)       # Model to use for subagents
+
+    dialects:                            # Dialects the persona speaks
+      chat<dialect.chat>: {}
+      responses<dialect.responses>: {}
+      anthropic<dialect.anthropic>: {}

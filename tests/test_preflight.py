@@ -136,7 +136,7 @@ def test_optional_verification_rejects_before_any_write(environment, backend, mo
 
 @pytest.mark.parametrize("action", ["fetch", "store"])
 def test_malformed_manager_command_is_rejected_before_persistence(environment, backend, action):
-    path = environment.store.component_path(("pass", "secret"))
+    path = environment.store.component_path(("secret", "pass"))
     tree = read_document(path)
     tree["secret"][action].replace(yapyon.parse('""'))
     write_document(tree, path, overwrite=True)
@@ -153,8 +153,8 @@ def test_malformed_manager_command_is_rejected_before_persistence(environment, b
 ])
 def test_native_and_wrapper_validation_precedes_registration(environment, backend, override):
     source = environment.home / "invalid.cfg"
-    source.write_text('agent<base.agent>:\n  name: "test_agent"\n  persona<ollama.persona>: {}\n'
-                      f'  harness<claude.harness>:\n    {override}\n')
+    source.write_text('agent<agent._DEFAULT_>:\n  name: "test_agent"\n  persona<persona.ollama>: {}\n'
+                      f'  harness<harness.claude>:\n    {override}\n')
     before = snapshot(environment.home)
     assert cli.main(["--create", str(source), "--token", str(environment.key)]) == 1
     assert snapshot(environment.home) == before
@@ -167,7 +167,7 @@ def test_bad_shell_startup_target_precedes_credential_handling(environment, back
     before = snapshot(environment.home)
     assert create(environment, "--token", str(environment.key)) == 1
     assert snapshot(environment.home) == before
-    assert not (environment.store.root / "store").exists()
+    assert not (environment.store.root / "entries").exists()
     backend.store.assert_not_called()
     backend.readiness.assert_not_called()
 
@@ -214,7 +214,7 @@ def test_successful_import_and_readback_happen_before_registration(environment, 
 @pytest.mark.parametrize("selection", ["gopass", "custom"])
 def test_agent_backend_override_reaches_preflight_import_and_wrapper(environment, backend, selection):
     if selection == "gopass":
-        secret = 'agent:\n  secret<gopass.secret>:\n    entry: "shared/key"\n'
+        secret = 'agent:\n  secret<secret.gopass>:\n    entry: "shared/key"\n'
         expected_name, expected_fetch = "gopass", "gopass show -o shared/key"
     else:
         secret = ('agent:\n  secret:\n    name: "custom_vault"\n    root: "separate"\n'
@@ -320,12 +320,12 @@ def test_stale_source_update_is_refused(environment):
 def test_stale_shared_component_is_refused(environment):
     environment.store.create("other", make_agent("ollama", "claude"))
     candidate = environment.store.prepare_create("candidate", make_agent("ollama", "claude"))
-    path = environment.store.component_path(("ollama", "persona"))
+    path = environment.store.component_path(("persona", "ollama"))
     tree = read_document(path)
     tree["persona"]["desc"].replace(yapyon.parse('"changed after preflight"'))
     write_document(tree, path, overwrite=True)
     before = snapshot(environment.home)
-    with pytest.raises(ValueError, match="configuration changed during preflight"):
+    with pytest.raises(ValueError, match="changed during preflight"):
         environment.store.commit(candidate)
     assert snapshot(environment.home) == before
 

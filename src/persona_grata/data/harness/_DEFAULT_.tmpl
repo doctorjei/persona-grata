@@ -1,0 +1,13 @@
+##################################################################################################
+# Harness Default Settings
+#
+# A harness declares which wire protocols it can speak, best first; the persona declares where it
+# serves each one (mind.dialects). The filtered comprehension selects the name of
+# the winning dialect -- which is both the compatibility answer ("no match" = cannot be built) and
+# the key that locates its URIs.
+
+harness<harness._BUILTIN_>: {}
+#  path: ()!                 # Path to custom harness settings files
+#  wrapper_env: ()!          # Env. vars exported by shell wrapper (conf)
+#  supported_dialects: ()!   # Protocols spoken, best first <REQUIRED>
+#  protocol: ()!

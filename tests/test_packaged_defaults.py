@@ -24,11 +24,12 @@ def test_packaged_defaults_are_the_current_literal_schema():
         XDG_CONFIG_DIRS XDG_CONFIG_HOME XDG_DATA_DIRS XDG_DATA_HOME XDG_RUNTIME_DIR
         XDG_STATE_HOME""".split()
     assert data == {
-        "format": "agents-yapyon-v0.1",
+        "format": "agents-yapyon-v0.6.5",
         "agents": {},
-        "defaults": {"secret": {"backend": None, "root": "agents"}},
-        "env_add": [],
-        "env_allow": expected_env,
+        "defaults": {"persona": {}, "harness": {}, "dialect": {},
+                     "secret": {"backend": None, "root": "agents"}},
+        "paths": {"shared": "shared", "entries": "entries"},
+        "env_vars": {"additions": [], "from_host": expected_env},
     }
 
 
@@ -55,6 +56,9 @@ def test_workflow_wheel_gate_references_existing_runtime_assets(workflow):
     gate = re.search(r"for f in (.*?);\s*do", source, re.S)
     assert gate, f"{workflow} must check the wheel's runtime assets"
     assets = shlex.split(gate.group(1).replace("\\\n", " "))
-    assert {"secrets/pass.secret.tmpl", "agent_store-defaults.cfg"} <= set(assets)
+    required = {"global.tmpl", "agent_store-defaults.cfg", "secret/pass.tmpl"}
+    required.update(f"{kind}/{layer}.tmpl" for kind in ("agent", "persona", "harness", "dialect", "secret")
+                    for layer in ("_BUILTIN_", "_DEFAULT_"))
+    assert required <= set(assets)
     for asset in assets:
         assert (ROOT / "src" / "persona_grata" / "data" / asset).is_file(), asset

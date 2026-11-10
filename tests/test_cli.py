@@ -97,8 +97,8 @@ def lifecycle(monkeypatch, tmp_path):
         state.calls.append(("make", persona, harness, name))
         return yapyon.parse(
             f'agent:\n  name: "{name or persona + "_" + harness}"\n'
-            f"  persona<{persona}.persona>: {{}}\n"
-            f"  harness<{harness}.harness>: {{}}\n"
+            f"  persona<persona.{persona}>: {{}}\n"
+            f"  harness<harness.{harness}>: {{}}\n"
             "  secret:\n    entry: y\"{name}\"\n"
         )
 
@@ -203,7 +203,7 @@ def test_no_args_empty_store_is_not_created(lifecycle, capsys):
 
 
 def test_name_alone_prints_saved_source_without_resolving(lifecycle, capsys):
-    source = 'agent:\n  name: "existing"\n  secret<pass.secret>: {}\n  desc: y"{$MISSING}"\n'
+    source = 'agent:\n  name: "existing"\n  secret<secret.pass>: {}\n  desc: y"{$MISSING}"\n'
     lifecycle.seed(body=source)
     assert cli.main(["existing"]) == 0
     assert capsys.readouterr().out == source
@@ -425,7 +425,7 @@ def test_remove_unknown_does_not_prompt(lifecycle, monkeypatch):
 
 
 def test_export_unfinished_source_does_not_resolve(lifecycle, tmp_path):
-    path = lifecycle.seed(body='agent:\n  name: "existing"\n  secret<pass.secret>: {}\n  desc: y"{$UNSET}"\n')
+    path = lifecycle.seed(body='agent:\n  name: "existing"\n  secret<secret.pass>: {}\n  desc: y"{$UNSET}"\n')
     destination = tmp_path / "export.cfg"
     assert cli.main(["--export", str(destination), "existing"]) == 0
     assert yapyon.parse_file(destination).to_source() == yapyon.parse_file(path / "agent.cfg").to_source()
@@ -506,22 +506,22 @@ def test_real_keyless_lifecycle_create_export_update_remove(hermetic_store, tmp_
     assert cli.main(["--remove", "renamed", "--yes"]) == 0
     assert not directory.exists()
     assert store.agents() == {}
-    assert (store.root / "personas" / "ollama.persona.tmpl").exists()
+    assert (store.root / "shared/persona/ollama.tmpl").exists()
 
 
 def test_real_source_create_and_external_agent_path_rejection(hermetic_store, tmp_path):
     source = tmp_path / "custom.cfg"
     source.write_text(
-        'agent<base.agent>:\n  name: "custom"\n'
-        '  persona<ollama.persona>: {}\n  harness<claude.harness>: {}\n'
+        'agent<agent._DEFAULT_>:\n  name: "custom"\n'
+        '  persona<persona.ollama>: {}\n  harness<harness.claude>: {}\n'
     )
     directory = tmp_path / "custom directory"
     assert cli.main(["--create", str(source), "--path", str(directory), "--no-token", "--no-wrapper"]) == 0
     assert hermetic_store.locate("custom") == directory
 
     source.write_text(
-        'agent<base.agent>:\n  name: "bad"\n  path: "/forbidden"\n'
-        '  persona<ollama.persona>: {}\n  harness<claude.harness>: {}\n'
+        'agent<agent._DEFAULT_>:\n  name: "bad"\n  path: "/forbidden"\n'
+        '  persona<persona.ollama>: {}\n  harness<harness.claude>: {}\n'
     )
     assert cli.main(["--create", str(source), "--no-token", "--no-wrapper"]) == 1
     assert "bad" not in hermetic_store.agents()
@@ -622,15 +622,15 @@ def test_update_follows_symlink_ancestor_to_foreign_target(hermetic_store, tmp_p
     assert cli.main(["--create", "ollama", "claude", "--no-token", "--no-wrapper"]) == 0
     directory = hermetic_store.locate("ollama_claude")
     original = (directory / "agent.cfg").read_bytes()
-    (hermetic_store.root / "store").rename(hermetic_store.root / "saved_store")
+    (hermetic_store.root / "entries").rename(hermetic_store.root / "saved_store")
     foreign = tmp_path / "foreign" / "ollama_claude"
     foreign.mkdir(parents=True)
     (foreign / "agent.cfg").write_bytes(original)
-    (hermetic_store.root / "store").symlink_to(foreign.parent, target_is_directory=True)
+    (hermetic_store.root / "entries").symlink_to(foreign.parent, target_is_directory=True)
     source = tmp_path / "replacement.cfg"
     source.write_text(
-        'agent<base.agent>:\n  name: "replacement"\n  desc: "FOREIGN CHANGED"\n'
-        '  persona<ollama.persona>: {}\n  harness<claude.harness>: {}\n  secret: None\n'
+        'agent<agent._DEFAULT_>:\n  name: "replacement"\n  desc: "FOREIGN CHANGED"\n'
+        '  persona<persona.ollama>: {}\n  harness<harness.claude>: {}\n  secret: None\n'
     )
     assert cli.main(["--update", "ollama_claude", str(source), "--no-wrapper"]) == 0
     assert (foreign / "agent.cfg").read_bytes() != original

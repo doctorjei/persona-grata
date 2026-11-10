@@ -9,7 +9,7 @@ import yapyon
 
 from persona_grata import AgentStore, make_agent
 from persona_grata.composition import DATA_DIR, load_preset, read_document
-from persona_grata.store import default_store
+from persona_grata.store import FORMAT, default_store
 from persona_grata import yapyon_io as yio
 
 
@@ -36,38 +36,37 @@ def test_read_empty_store_does_not_create_it(store):
 
 
 def test_registry_keeps_environment_policy_after_agents(store):
-    expected_allow = store.settings["env_allow"]
-    store.configure(env_add=["MY_ENDPOINT"], env_allow=expected_allow)
+    expected_allow = store.settings["env_vars"]["from_host"]
+    store.configure(env_vars={"additions": ["MY_ENDPOINT"], "from_host": expected_allow})
     store.create("scout", make_agent("ollama", "codex"))
     saved = yapyon.loads_record(store.registry_path.read_text())
-    assert saved["env_add"] == ["MY_ENDPOINT"]
-    assert saved["env_allow"] == expected_allow
-    assert list(saved)[-2:] == ["env_add", "env_allow"]
-    assert list(saved).index("agents") < list(saved).index("env_add")
+    assert saved["env_vars"] == {"additions": ["MY_ENDPOINT"], "from_host": expected_allow}
+    assert list(saved)[-1] == "env_vars"
+    assert list(saved).index("agents") < list(saved).index("env_vars")
     store.configure(defaults={"secret": {"root": "custom"}})
     updated = yapyon.loads_record(store.registry_path.read_text())
     assert updated == {**saved, "defaults": {"secret": {"root": "custom"}}}
-    assert list(updated)[-2:] == ["env_add", "env_allow"]
+    assert list(updated)[-1] == "env_vars"
 
 
 def test_create_materializes_only_used_composed_categories(store):
-    definition = load_preset(("minimax_claude", "agent"))
+    definition = load_preset(("agent", "minimax_claude"))
     path = store.create("scout", definition)
-    assert path == store.root / "store/scout"
+    assert path == store.root / "entries/scout"
     assert store.agents() == {"scout": path}
     saved = yapyon.parse_file(path / "agent.cfg")
     assert saved["agent"].kind == "mapping"
     assert saved["agent"]["name"].value == "scout"
     assert saved["agent"]["secret"].value is None
-    assert {slot.label for slot in saved.slots()} == {("minimax", "persona"), ("claude", "harness")}
-    assert sorted(p.name for p in (store.root / "personas").iterdir()) == ["minimax.persona.tmpl"]
-    assert sorted(p.name for p in (store.root / "harnesses").iterdir()) == ["claude.harness.tmpl"]
-    assert {p.name for p in (store.root / "dialects").iterdir()} == {
-        "chat.dialect.tmpl", "responses.dialect.tmpl", "anthropic.dialect.tmpl"}
-    assert not (store.root / "store/__templates__").exists()
+    assert {slot.label for slot in saved.slots()} == {("persona", "minimax"), ("harness", "claude")}
+    assert sorted(p.name for p in (store.root / "shared/persona").iterdir()) == ["minimax.tmpl"]
+    assert sorted(p.name for p in (store.root / "shared/harness").iterdir()) == ["claude.tmpl"]
+    assert {p.name for p in (store.root / "shared/dialect").iterdir()} == {
+        "chat.tmpl", "responses.tmpl", "anthropic.tmpl"}
+    assert not (store.root / "entries/__templates__").exists()
     assert not (store.root / "agents").exists()
     assert not list(store.root.rglob("base.*.tmpl"))
-    persona = yapyon.parse_file(store.root / "personas/minimax.persona.tmpl")
+    persona = yapyon.parse_file(store.root / "shared/persona/minimax.tmpl")
     assert persona["persona"].kind == "mapping"
     assert persona["persona"]["desc"].value == "Minimax"
 
@@ -94,8 +93,8 @@ def test_reload_without_shipped_template_library(store, monkeypatch):
     native = json.loads(harness["content"])
     assert native["env"]["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
     assert native["env"]["ANTHROPIC_MODEL"] == "MiniMax-M3.1-Flash"
-    assert native["env"]["ANTHROPIC_AUTH_TOKEN"] == "no-token-required"
-    assert harness["auth_var"] == ""
+    assert "ANTHROPIC_AUTH_TOKEN" not in native["env"]
+    assert harness["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
     assert harness["path"] == str(store.locate("scout") / "harness")
     assert not (store.locate("scout") / "harness").exists()
 
@@ -129,7 +128,7 @@ def test_rename_keeps_directory_but_name_based_default_entry_follows_name(store)
 def test_default_secret_root_is_inherited_and_applied(store, backend):
     store.configure(defaults={"secret": {"backend": backend}})
     assert yapyon.loads_record(store.registry_path.read_text()) == {
-        "defaults": {"secret": {"backend": backend}}}
+        "format": FORMAT, "defaults": {"secret": {"backend": backend}}}
     store = AgentStore(store.root)
     store.create("scout", make_agent("minimax", "claude"))
     resolved = store.load("scout")
@@ -170,7 +169,7 @@ def test_keyless_stays_keyless_after_backend_configured(store):
     assert resolved["agent"]["secret"] is None
     assert resolved["runtime"]["secret_backend"]["name"] == "pass"
     assert tomllib.loads(resolved["agent"]["harness"]["content"])[
-        "model_providers"]["ollama"]["env_key"] == ""
+        "model_providers"]["ollama"]["env_key"] == "API_KEY"
 
 
 @pytest.mark.parametrize("definition", [
@@ -185,7 +184,7 @@ def test_invocation_owned_fields_cannot_be_supplied(store, definition):
 
 def test_required_slot_refuses_creation(store):
     with pytest.raises((ValueError, yapyon.AkanError), match="required slot|abstract slot"):
-        store.create("missing", load_preset(("base", "agent")))
+        store.create("missing", load_preset(("agent", "_DEFAULT_")))
     assert store.agents() == {}
 
 
@@ -201,7 +200,8 @@ def test_mapping_secret_without_backend_is_not_silently_keyless(store):
 def test_unsafe_secret_entries(store, entry):
     store.configure(defaults={"secret": {"backend": "pass"}})
     definition = yapyon.merge(make_agent("minimax", "claude"),
-                              yio.value_tree({"agent": {"secret": {"entry": entry}}}))
+                              yio.value_tree({"agent": {"secret": {
+                                  "name": "inline", "fetch": "fake-reader", "entry": entry}}}))
     with pytest.raises(ValueError, match="secret entry"):
         store.create("bad", definition)
     assert store.agents() == {}
@@ -209,7 +209,7 @@ def test_unsafe_secret_entries(store, entry):
 
 def test_create_uses_existing_composed_component_without_overwrite(store):
     store.create("first", make_agent("minimax", "claude"))
-    component = store.root / "personas/minimax.persona.tmpl"
+    component = store.root / "shared/persona/minimax.tmpl"
     tree = yapyon.parse_file(component)
     tree["persona"]["desc"].replace(yio.value_tree("Locally edited"))
     component.write_text(tree.to_source())
@@ -240,7 +240,7 @@ def test_registry_write_failure_rolls_back_new_agent(store, monkeypatch):
     monkeypatch.setattr(store, "_write", lambda data: (_ for _ in ()).throw(OSError("disk full")))
     with pytest.raises(OSError, match="disk full"):
         store.create("one", make_agent("minimax", "claude"))
-    assert not (store.root / "store/one").exists()
+    assert not (store.root / "entries/one").exists()
     assert store.agents() == {}
 
 
@@ -258,7 +258,7 @@ def test_symlinked_agent_directory_loads_and_updates_target(store, tmp_path):
     store.update("one", make_agent("kimi", "codex"))
     assert path.is_symlink()
     assert store.load("one")["agent"]["persona"]["name"] == "kimi"
-    assert yapyon.parse_file(target / "agent.cfg")["agent"]["persona"].label == ("kimi", "persona")
+    assert yapyon.parse_file(target / "agent.cfg")["agent"]["persona"].label == ("persona", "kimi")
 
 
 def test_symlinked_registry_is_read_and_updated_at_its_target(store, tmp_path):
@@ -266,14 +266,14 @@ def test_symlinked_registry_is_read_and_updated_at_its_target(store, tmp_path):
     target = tmp_path / "registry.yap"
     store.registry_path.rename(target)
     store.registry_path.symlink_to(target)
-    store.configure(env_add=["PG_ENDPOINT"])
+    store.configure(env_vars={"additions": ["PG_ENDPOINT"]})
     assert store.registry_path.is_symlink()
-    assert yapyon.loads_record(target.read_text())["env_add"] == ["PG_ENDPOINT"]
+    assert yapyon.loads_record(target.read_text())["env_vars"]["additions"] == ["PG_ENDPOINT"]
 
 
 def test_symlinked_component_is_reused(store, tmp_path):
     store.create("first", make_agent("minimax", "claude"))
-    component = store.root / "personas/minimax.persona.tmpl"
+    component = store.root / "shared/persona/minimax.tmpl"
     target = tmp_path / "minimax.persona.tmpl"
     component.rename(target)
     component.symlink_to(target)
@@ -285,19 +285,20 @@ def test_symlinked_component_is_reused(store, tmp_path):
 def test_load_uses_new_environment_allowlist(store, monkeypatch):
     monkeypatch.setenv("PG_PRIVATE_ENDPOINT", "https://example.invalid")
     store.create("one", make_agent("minimax", "claude"))
-    path = store.root / "personas/minimax.persona.tmpl"
+    path = store.root / "shared/persona/minimax.tmpl"
     tree = yapyon.parse_file(path)
     tree["persona"]["mind"]["endpoint"].replace(yapyon.parse('y"{$PG_PRIVATE_ENDPOINT}"'))
     path.write_text(tree.to_source())
     with pytest.raises(yapyon.AkanError):
         store.load("one")
-    store.configure(env_add=["PG_PRIVATE_ENDPOINT"])
+    store.configure(env_vars={"additions": ["PG_PRIVATE_ENDPOINT"]})
     assert store.load("one")["agent"]["persona"]["mind"]["endpoint"] == "https://example.invalid"
 
 
 @pytest.mark.parametrize("changes", [
     {"defaults": {"secret": {"backend": []}}}, {"defaults": {"secret": {"root": "../bad"}}},
-    {"env_add": "NO"}, {"env_allow": [""]}, {"env_add": ["9BAD"]},
+    {"env_vars": {"additions": "NO"}}, {"env_vars": {"from_host": [""]}},
+    {"env_vars": {"additions": ["9BAD"]}},
     {"agents": {}},
 ])
 def test_invalid_settings_are_not_written(store, changes):
@@ -306,10 +307,15 @@ def test_invalid_settings_are_not_written(store, changes):
     assert not store.registry_path.exists()
 
 
-@pytest.mark.parametrize("persona", [path.name.removesuffix(".persona.tmpl")
-                                    for path in sorted((DATA_DIR / "personas").glob("*.persona.tmpl"))
-                                    if not path.name.startswith("base.")])
-@pytest.mark.parametrize("harness", ["claude", "codex"])
+PERSONAS = [path.stem for path in sorted((DATA_DIR / "persona").glob("*.tmpl"))
+            if path.stem not in {"_BUILTIN_", "_DEFAULT_"}]
+HARNESSES = [path.stem for path in sorted((DATA_DIR / "harness").glob("*.tmpl"))
+             if path.stem not in {"_BUILTIN_", "_DEFAULT_"}]
+assert PERSONAS and HARNESSES, "no bundled persona/harness pairs discovered"
+
+
+@pytest.mark.parametrize("persona", PERSONAS)
+@pytest.mark.parametrize("harness", HARNESSES)
 def test_every_supported_pair_renders_without_pg_functions(store, persona, harness):
     name = f"{persona}_{harness}"
     store.create(name, make_agent(persona, harness))
@@ -329,7 +335,7 @@ def test_every_supported_pair_renders_without_pg_functions(store, persona, harne
             assert all(value is not None for value in native["env"].values())
         else:
             assert "model" not in native
-            assert native["@_lexemes"]["model"] == "None"
+            assert "@_lexemes" not in native or "model" not in native["@_lexemes"]
             assert native["models"] == {}
 
 
@@ -355,7 +361,7 @@ def test_claude_none_filter_cleans_native_copy_only(store):
     assert native["env"]["CUSTOM_EMPTY"] == ""
     assert native["env"]["CUSTOM_ZERO"] == 0
     assert native["env"]["CUSTOM_FALSE"] is False
-    source = read_document(store.root / "harnesses/claude.harness.tmpl").to_source()
+    source = read_document(store.root / "shared/harness/claude.tmpl").to_source()
     assert "__not_none__().__as_json__()" in source
     assert "for name, value" not in source
     assert yapyon.parse(source).to_source() == source
@@ -381,7 +387,7 @@ def test_claude_optional_defaults_keep_available_model_values(store):
 @pytest.mark.parametrize("definition", [
     'agent: {}', 'agent: {persona: {}}',
     'agent: {persona: {}, harness: {}}',
-    'agent<base.agent>: {format: "future", persona<minimax.persona>: {}, harness<claude.harness>: {}}',
+    'agent<agent._DEFAULT_>: {format: "future", persona<persona.minimax>: {}, harness<harness.claude>: {}}',
 ])
 def test_malformed_agent_never_registers(store, definition):
     with pytest.raises((ValueError, yapyon.AkanError)):
@@ -411,9 +417,9 @@ def test_symlink_ancestor_redirects_update_to_its_target(store, tmp_path):
     foreign = tmp_path / "foreign"
     (foreign / "one").mkdir(parents=True)
     (foreign / "one/agent.cfg").write_text("untouched")
-    (store.root / "store").rename(store.root / "old-store")
+    (store.root / "entries").rename(store.root / "old-store")
     old_path = store.root / "old-store" / "one"
-    (store.root / "store").symlink_to(foreign, target_is_directory=True)
+    (store.root / "entries").symlink_to(foreign, target_is_directory=True)
     store.update("one", make_agent("kimi", "codex"))
     assert store.load("one")["agent"]["persona"]["name"] == "kimi"
     assert (old_path / "agent.cfg").read_bytes() == before
@@ -449,7 +455,7 @@ def test_unknown_or_computed_reserved_agent_fields_are_rejected(store):
 
 def test_disabling_dialects_changes_negotiation(store):
     definition = yapyon.merge(make_agent("minimax", "codex"), yapyon.parse('''agent:
-  persona<minimax.persona>:
+  persona<persona.minimax>:
     mind:
       dialects:
         responses:= None
@@ -495,7 +501,7 @@ def test_registry_failure_rolls_back_new_components(store, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         store.create("bad", make_agent("minimax", "claude"))
     assert not list(store.root.rglob("*.tmpl"))
-    assert not (store.root / "store/bad").exists()
+    assert not (store.root / "entries/bad").exists()
 
 
 @pytest.mark.parametrize("supported,protocol", [([], "chat"), (["chat"], "responses")])

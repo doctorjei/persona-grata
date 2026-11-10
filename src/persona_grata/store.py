@@ -14,22 +14,13 @@ from .composition import (
     load_preset, read_document, read_record, read_text, write_document, write_record,
 )
 from .identifiers import validate_id
+from .defaults import bind_defaults, defaults_source, overlay as _overlay
+from .schema import FORMAT, validate_defaults, validate_definition, validate_env_name
 from . import yapyon_io as yio
 
 
-FORMAT = "agents-yapyon-v0.1"
-COMPONENT_DIRS = KIND_DIRS
+
 DEFAULTS_PATH = DATA_DIR / "agent_store-defaults.cfg"
-
-
-def _overlay(base, overrides):
-    result = copy.deepcopy(base)
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _overlay(result[key], value)
-        else:
-            result[key] = copy.deepcopy(value)
-    return result
 
 
 def default_store():
@@ -37,7 +28,7 @@ def default_store():
     if configured:
         return Path(configured).expanduser().absolute()
     config_home = os.environ.get("XDG_CONFIG_HOME")
-    return (Path(config_home).expanduser() if config_home else Path.home() / ".config") / "agents"
+    return ((Path(config_home).expanduser() if config_home else Path.home() / ".config") / "agents").absolute()
 
 
 def make_agent(persona, harness, *, name=None):
@@ -45,19 +36,9 @@ def make_agent(persona, harness, *, name=None):
     validate_id(harness, "harness")
     name = validate_id(name if name is not None else f"{persona}_{harness}")
     return yapyon.parse(
-        f"agent<base.agent>:\n  name: {name!r}\n"
-        f"  persona<{persona}.persona>: {{}}\n"
-        f"  harness<{harness}.harness>: {{}}\n")
-
-
-def _entry(value, *, allow_empty=False):
-    if not isinstance(value, str) or (not value and not allow_empty):
-        raise ValueError("a secret entry must be a nonempty string")
-    if value and (value.startswith(("/", "-")) or
-                  any(part in ("", ".", "..") for part in value.split("/")) or
-                  any(ch in value for ch in "\x00\r\n")):
-        raise ValueError("a secret entry must be store-relative without dot segments or control characters")
-    return value
+        f"agent<agent._DEFAULT_>:\n  name: {name!r}\n"
+        f"  persona<persona.{persona}>: {{}}\n"
+        f"  harness<harness.{harness}>: {{}}\n")
 
 
 @dataclass(frozen=True)
@@ -71,10 +52,13 @@ class _PreparedAgent:
     registry: dict = field(repr=False)
     previous_name: str | None = None
     previous_source: str | None = field(default=None, repr=False)
+    inputs: dict = field(default_factory=dict, repr=False)
 
 
 class AgentStore:
     def __init__(self, root=None):
+        if root is not None and not os.fspath(root):
+            raise ValueError("an explicit store root must not be empty")
         self.root = Path(root if root is not None else default_store()).expanduser().resolve()
         self.registry_path = self.root / "agent_store.cfg"
 
@@ -83,7 +67,7 @@ class AgentStore:
         return read_record(DEFAULTS_PATH)
 
     def _read_overrides(self):
-        if not self.registry_path.exists():
+        if not self.registry_path.exists() and not self.registry_path.is_symlink():
             return {}
         source = read_text(self.registry_path)
         if all(not line.strip() or line.lstrip().startswith("#") for line in source.splitlines()):
@@ -102,22 +86,21 @@ class AgentStore:
             raise ValueError("unknown store settings: " + ", ".join(sorted(unknown)))
         if data["format"] != FORMAT:
             raise ValueError(f"unsupported agent store format: {data['format']!r}")
-        defaults = data["defaults"]
-        if not isinstance(defaults, dict) or set(defaults) != {"secret"}:
-            raise ValueError("defaults must contain only secret settings")
-        secret = defaults["secret"]
-        if not isinstance(secret, dict) or set(secret) != {"backend", "root"}:
-            raise ValueError("defaults.secret must contain backend and root")
-        backend = secret["backend"]
-        if backend is not None:
-            validate_id(backend, "secret backend")
-        if secret["root"] is not None:
-            _entry(secret["root"])
-        for key in ("env_allow", "env_add"):
-            if not isinstance(data[key], list) or not all(
-                    isinstance(item, str) and item.isascii() and item.replace("_", "a").isalnum()
-                    and not item[0].isdigit() for item in data[key]):
-                raise ValueError(f"{key} must be a list of environment variable names")
+        validate_defaults(data["defaults"])
+        paths_config = data["paths"]
+        if not isinstance(paths_config, dict) or set(paths_config) != {"shared", "entries"}:
+            raise ValueError("paths must contain only shared and entries")
+        for value in paths_config.values():
+            if not isinstance(value, str) or not value or "\x00" in value:
+                raise ValueError("paths settings must be nonempty path strings without NUL")
+        environment = data["env_vars"]
+        if not isinstance(environment, dict) or set(environment) != {"from_host", "additions"}:
+            raise ValueError("env_vars must contain only from_host and additions")
+        for key, values in environment.items():
+            if not isinstance(values, list):
+                raise ValueError(f"env_vars.{key} must be a list of environment variable names")
+            for value in values:
+                validate_env_name(value)
         if not isinstance(data["agents"], dict):
             raise ValueError("agents must map names to path records")
         paths = []
@@ -126,12 +109,12 @@ class AgentStore:
             if not isinstance(record, dict) or set(record) != {"path"}:
                 raise ValueError(f"registry entry {name!r} must contain only path")
             value = record["path"]
-            if not isinstance(value, str) or not Path(value).is_absolute():
+            if not isinstance(value, str) or not value or "\x00" in value or not Path(value).is_absolute():
                 raise ValueError(f"registry path for {name!r} must be absolute")
             path = Path(value)
             if ".." in path.parts:
                 raise ValueError(f"registry path for {name!r} must not contain '..'")
-            self._check_location(path)
+            self._check_location(path, data)
             for previous in paths:
                 if path == previous or path in previous.parents or previous in path.parents:
                     raise ValueError("registered agent directories cannot overlap")
@@ -139,8 +122,11 @@ class AgentStore:
         return data
 
     def _write(self, data):
-        ordered = {key: value for key, value in data.items() if key not in {"env_add", "env_allow"}}
-        ordered.update((key, data[key]) for key in ("env_add", "env_allow") if key in data)
+        ordered = {key: value for key, value in data.items() if key != "env_vars"}
+        if data and not self._read_overrides():
+            ordered = {"format": FORMAT, **ordered}
+        if "env_vars" in data:
+            ordered["env_vars"] = data["env_vars"]
         write_record(ordered, self.registry_path, overwrite=True)
 
     def _write_agents(self, data):
@@ -165,16 +151,17 @@ class AgentStore:
         return copy.deepcopy(self._read())
 
     def configure(self, **changes):
-        if changes.keys() - {"defaults", "env_allow", "env_add"}:
-            raise ValueError("only default and environment settings may be configured")
+        if changes.keys() - {"defaults", "paths", "env_vars"}:
+            raise ValueError("only default, path and environment settings may be configured")
         with self._locked():
             overrides = _overlay(self._read_overrides(), changes)
             proposed = self._validate_settings(_overlay(self._defaults(), overrides))
             components = {}
             backend = proposed["defaults"]["secret"]["backend"]
             if backend is not None:
-                self._materialize((backend, "secret"), components=components)
-            written = self._save_components(components)
+                provision = lambda label: self._materialize(label, data=proposed, components=components)
+                compose(yapyon.parse(f"secret<secret.{backend}>: {{}}"), lookup=provision)
+            written = self._save_components(components, data=proposed)
             try:
                 self._write(overrides)
             except BaseException:
@@ -186,12 +173,16 @@ class AgentStore:
     def agents(self):
         return {name: Path(record["path"]) for name, record in self._read()["agents"].items()}
 
-    def _check_location(self, path):
-        components = {self.root / part for part in COMPONENT_DIRS.values()}
-        protected = {self.root, self.root / "store", *components,
-                     Path.home().absolute(), Path(path.anchor)}
-        if (path in protected or path in self.root.parents or
-                any(directory in path.parents for directory in components)):
+    def _configured_path(self, key, data):
+        selected = Path(data["paths"][key])
+        return Path(os.path.abspath(selected if selected.is_absolute() else self.root / selected))
+
+    def _check_location(self, path, data=None):
+        data = self._read() if data is None else data
+        shared = self._configured_path("shared", data)
+        entries = self._configured_path("entries", data)
+        protected = {self.root, shared, entries, Path.home().absolute(), Path(path.anchor)}
+        if path in protected or path in self.root.parents or shared in path.parents:
             raise ValueError(f"unsafe agent directory: {path}")
 
     def locate(self, name):
@@ -203,48 +194,40 @@ class AgentStore:
         self._check_location(path)
         return path
 
-    def component_path(self, label):
-        name, kind = label
-        validate_id(name, kind)
-        if kind not in COMPONENT_DIRS or kind == "agent":
-            raise ValueError(f"not a stored component kind: {kind!r}")
-        return self.root / COMPONENT_DIRS[kind] / f"{name}.{kind}.tmpl"
+    def component_path(self, label, *, settings=None):
+        from .composition import _check_label
 
-    def _source_lookup(self, label):
-        if label[1] != "agent":
-            path = self.component_path(label)
-            if path.exists():
-                return read_document(path)
+        _check_label(label)
+        data = self._read() if settings is None else settings
+        return self._configured_path("shared", data).joinpath(*label).with_suffix(".tmpl")
+
+    def _stored_lookup(self, label, *, data=None):
+        return read_document(self.component_path(label, settings=data))
+
+    def _source_lookup(self, label, data):
+        selected = self.component_path(label, settings=data)
+        if selected.exists() or selected.is_symlink():
+            return read_document(selected)
         return load_preset(label)
 
-    def _stored_lookup(self, label):
-        path = self.component_path(label)
-        return read_document(path)
-
-    def _materialize(self, label, pending=(), *, components):
-        if label in pending:
-            raise ValueError("recursive component dependency: " + " -> ".join(
-                ".".join(item) for item in (*pending, label)))
+    def _materialize(self, label, *, data, components):
         if label in components:
             return components[label]
-        path = self.component_path(label)
-        exists = path.exists()
-        tree = read_document(path) if exists else compose_preset(
-            label[1], label[0], lookup=self._source_lookup)
-        if not exists:
-            tree.to_source()
-        for slot in tree.slots():
-            if slot.label:
-                self._materialize(slot.label, (*pending, label), components=components)
-        if not exists:
-            components[label] = tree
+        path = self.component_path(label, settings=data)
+        if path.exists() or path.is_symlink():
+            return read_document(path)
+        if len(label) != 2 or label[0] not in KIND_DIRS:
+            raise FileNotFoundError(f"include {'.'.join(label)!r} is not available for provisioning")
+        tree = compose_preset(label[0], label[1], lookup=lambda item: self._source_lookup(item, data))
+        tree.to_source()
+        components[label] = tree
         return tree
 
-    def _save_components(self, components):
+    def _save_components(self, components, *, data):
         written = []
         try:
             for label, tree in components.items():
-                written.append(write_document(tree, self.component_path(label)))
+                written.append(write_document(tree, self.component_path(label, settings=data)))
         except BaseException:
             for path in written:
                 path.unlink(missing_ok=True)
@@ -275,39 +258,57 @@ class AgentStore:
     def _prepare(self, definition, name, data, *, components):
         if definition.root.kind != "mapping" or set(definition.keys()) != {"agent"}:
             raise ValueError("an agent document must contain only agent; runtime is invocation-owned")
-        tree = compose(definition, kinds={"agent"}, lookup=self._source_lookup)
-        agent = tree["agent"]
-        self._validate_agent(agent)
-        agent.merge(yio.value_tree({"name": name}))
+        tree = compose(definition, kinds={"agent"}, lookup=lambda label: self._source_lookup(label, data))
+        provision = lambda label: self._materialize(label, data=data, components=components)
+        filled = compose(tree, lookup=provision)
+        agent = filled["agent"]
+        self._validate_agent(agent, filled=True)
+        tree["agent"].merge(yio.value_tree({"name": name}))
         backend = data["defaults"]["secret"]["backend"]
-        if "secret" not in agent:
-            agent.merge(yapyon.parse("secret<>: {}"))
-        secret = agent["secret"]
-        if secret.kind == "slot" and not secret.label and backend is None:
-            if secret.overrides.keys():
+        if backend is not None:
+            compose(yapyon.parse(f"secret<secret.{backend}>: {{}}"), lookup=provision)
+        secret = agent["secret"] if "secret" in agent else None
+        default_slot = secret is None or (secret.kind == "slot" and not secret.label)
+        if default_slot and backend is None:
+            if secret is not None and secret.overrides.keys():
                 raise ValueError("agent needs a secret backend; select one or explicitly set secret: None")
-            secret.replace(yio.value_tree(None))
+            tree["agent"].merge(yio.value_tree({"secret": None}))
         tree.to_source()
-        for slot in tree.slots():
-            if slot.label:
-                self._materialize(slot.label, components=components)
-        if data["defaults"]["secret"]["backend"]:
-            self._materialize((data["defaults"]["secret"]["backend"], "secret"), components=components)
         return tree
 
-    def _assemble(self, definition, name, path, data, *, components=None):
+    @staticmethod
+    def _signature(path):
+        return read_text(path) if path.exists() or path.is_symlink() else None
+
+    def _assemble(self, definition, name, path, data, *, components=None, inputs=None):
         components = components or {}
+        snapshots = {}
+        environment = dict(os.environ)
 
         def lookup(label):
-            return components[label] if label in components else self._stored_lookup(label)
+            if label in components:
+                return components[label]
+            selected = self.component_path(label, settings=data)
+            text = read_text(selected)
+            if selected in snapshots and snapshots[selected] != text:
+                raise ValueError("agent source changed during resolution; retry the operation")
+            snapshots[selected] = text
+            return yapyon.parse(text, source=str(selected))
 
         backend = data["defaults"]["secret"]["backend"]
-        manager = (compose(lookup((backend, "secret")), lookup=lookup)["secret"]
+        manager = (compose(yapyon.parse(f"secret<secret.{backend}>: {{}}"), lookup=lookup)["secret"]
                    if backend is not None else yapyon.parse("{}").root)
+        if backend is not None:
+            default_source = yapyon.parse("agent: {secret<>: {}}")
+            default_source["agent"]["secret"].fill(manager)
+            manager = bind_defaults(default_source, data["defaults"])["agent"]["secret"]
         assembled = compose(definition, lookup=lookup)
         agent = assembled["agent"]
         self._validate_agent(agent, filled=True)
-        agent.merge(yio.value_tree({"name": name}))
+        if "name" in agent:
+            agent["name"].replace(yio.value_tree(name))
+        else:
+            agent.merge(yio.value_tree({"name": name}))
         if "secret" not in agent:
             agent.merge(yapyon.parse("secret<>: {}"))
         secret = agent["secret"]
@@ -315,77 +316,34 @@ class AgentStore:
             if backend is None and secret.overrides.keys():
                 raise ValueError("agent needs a secret backend; select one or explicitly set secret: None")
             secret.fill(manager if backend is not None else yio.value_tree(None))
-        keyless = secret is None or (secret.kind == "scalar" and secret.value is None)
-        if not keyless and secret.kind != "mapping":
+        if not (secret.kind == "mapping" or (secret.kind == "scalar" and secret.value is None)):
             raise ValueError("agent.secret must be a backend mapping or None")
-        if keyless:
-            agent.merge(yio.value_tree({"secret": None}))
-            if "harness" in agent and agent["harness"].kind == "mapping":
-                agent["harness"].merge(yio.value_tree({"auth_var": ""}))
-        if not keyless:
-            harness = agent["harness"]
-            if "config_store" in harness and "env" in harness["config_store"]:
-                env = harness["config_store"]["env"]
-                auth = harness["auth_var"]
-                if auth.kind == "scalar" and auth.value in env:
-                    env[auth.value].remove()
-        tree = read_document(DATA_DIR / "global.tmpl")
-        tree["runtime"].fill(yapyon.parse("{}"))
-        tree["runtime"]["agent_path"].replace(yio.value_tree(str(path)))
-        tree["runtime"]["defaults"].fill(yio.value_tree(data["defaults"]))
-        tree["runtime"]["secret_backend"].fill(manager)
-        tree["agent"].fill(agent)
+        assembled = bind_defaults(assembled, data["defaults"])
+        tree = yio.value_tree({"runtime": {
+            "agent_path": str(path), "defaults": {}, "secret_backend": {},
+        }})
+        tree["runtime"]["defaults"].replace(defaults_source(data["defaults"]))
+        tree["runtime"]["secret_backend"].replace(manager)
+        tree = yapyon.merge(tree, assembled)
         remaining = tree.slots()
         if remaining:
             slot = remaining[0]
             raise ValueError(f"{slot.where}: required slot remains unfilled at {slot.path}")
-        result = yio.resolve_document(
-            tree, env_allow=yio.RESERVED_ENV | set(data["env_allow"]) | set(data["env_add"]))
-        resolved_agent = result["agent"]
-        if "path" in resolved_agent:
-            raise ValueError("agent.path is forbidden, including computed keys")
-        if resolved_agent.get("format") != FORMAT:
-            raise ValueError(f"unsupported agent format; expected {FORMAT}")
-        persona = resolved_agent.get("persona")
-        harness = resolved_agent.get("harness")
-        if not isinstance(persona, dict) or not isinstance(harness, dict):
-            raise ValueError("agent requires persona and harness mappings")
-        mind = persona.get("mind")
-        endpoint = mind.get("endpoint") if isinstance(mind, dict) else None
-        if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
-            raise ValueError(f"agent {name!r} requires an http:// or https:// persona endpoint")
-        supported = harness.get("supported_dialects")
-        if not isinstance(supported, list) or not supported or not all(
-                isinstance(dialect, str) and dialect for dialect in supported):
-            raise ValueError("harness.supported_dialects must be a nonempty list of dialect names")
-        dialects = mind.get("dialects")
-        protocol = harness.get("protocol")
-        if (not isinstance(dialects, dict) or not isinstance(protocol, str) or
-                protocol not in supported or not isinstance(dialects.get(protocol), dict)):
-            raise ValueError("harness.protocol must select a shared, enabled dialect")
-        if not isinstance(harness.get("name"), str) or not harness["name"]:
-            raise ValueError("agent harness requires a name")
-        if harness.get("path") != str(path / "harness"):
-            raise ValueError("harness.path must be the agent directory's harness subdirectory")
-        secret = resolved_agent["secret"]
-        if secret is not None:
-            if not isinstance(secret, dict):
-                raise ValueError("agent.secret must be a backend mapping or None")
-            _entry(secret.get("entry"))
-            if secret.get("root") is not None:
-                _entry(secret["root"])
-            for key in ("name", "fetch"):
-                if not isinstance(secret.get(key), str) or not secret[key]:
-                    raise ValueError(f"agent.secret.{key} must be a nonempty string")
-            for key in ("store", "probe", "check"):
-                if key in secret and secret[key] is not None and not isinstance(secret[key], str):
-                    raise ValueError(f"agent.secret.{key} must be a string or None")
+        policy = data["env_vars"]
+        result = tree.resolve(env=environment, env_allow=(
+            yio.RESERVED_ENV | set(policy["from_host"]) | set(policy["additions"])))
+        validate_definition(result["agent"], name=name, path=path)
+        for selected, text in snapshots.items():
+            if self._signature(selected) != text:
+                raise ValueError("agent source changed during resolution; retry the operation")
+        if inputs is not None:
+            inputs.update(snapshots)
         return result
 
     def _check_new_agent(self, name, destination, data):
         if ".." in destination.parts:
             raise ValueError("agent directory must not contain '..'")
-        self._check_location(destination)
+        self._check_location(destination, data)
         if name in data["agents"]:
             raise FileExistsError(f"agent name {name!r} is already occupied")
         if destination.exists() or destination.is_symlink():
@@ -397,26 +355,29 @@ class AgentStore:
 
     def _candidate(self, name, definition, path, data, *, previous_name=None, previous_source=None):
         components = {}
+        inputs = {self.registry_path: self._signature(self.registry_path),
+                  DEFAULTS_PATH: self._signature(DEFAULTS_PATH)}
         tree = self._prepare(definition, name, data, components=components)
-        resolved = self._assemble(tree, name, path, data, components=components)
+        resolved = self._assemble(tree, name, path, data, components=components, inputs=inputs)
         proposed = copy.deepcopy(data)
         if previous_name is not None:
             del proposed["agents"][previous_name]
         proposed["agents"][name] = {"path": str(path)}
         yapyon.dumps(proposed, max_size=MAX_SOURCE_BYTES)
-        targets = [path / "agent.cfg", *(self.component_path(label) for label in components)]
+        targets = [path / "agent.cfg", *(self.component_path(label, settings=data) for label in components)]
         if previous_name != name:
             targets.append(self.registry_path)
         for target in targets:
             check_write_path(target)
         return _PreparedAgent(self.root, name, path, tree, resolved, components, data,
-                              previous_name, previous_source)
+                              previous_name, previous_source, inputs)
 
     def prepare_create(self, name, definition, *, path=None):
         """Resolve a prospective agent without creating its store or files."""
         validate_id(name)
-        destination = Path(path).expanduser().absolute() if path is not None else self.root / "store" / name
         data = self._read()
+        destination = (Path(path).expanduser().absolute() if path is not None
+                       else self._configured_path("entries", data) / name)
         self._check_new_agent(name, destination, data)
         return self._candidate(name, definition, destination, data)
 
@@ -443,6 +404,9 @@ class AgentStore:
             data = self._read()
             if data != prepared.registry:
                 raise ValueError("agent store changed during preflight; retry the operation")
+            for selected, signature in prepared.inputs.items():
+                if self._signature(selected) != signature:
+                    raise ValueError("agent source or settings changed during preflight; retry the operation")
             updating = prepared.previous_name is not None
             if updating:
                 if read_text(path / "agent.cfg") != prepared.previous_source:
@@ -458,7 +422,7 @@ class AgentStore:
             written = []
             saved = False
             try:
-                written = self._save_components(prepared.components)
+                written = self._save_components(prepared.components, data=data)
                 write_document(prepared.definition, path / "agent.cfg", overwrite=updating)
                 saved = True
                 if prepared.previous_name != prepared.name:
@@ -490,26 +454,9 @@ class AgentStore:
 
     def rename(self, old, new):
         validate_id(new)
-        with self._locked():
-            data = self._read()
-            path = self.locate(old)
-            if new in data["agents"]:
-                raise FileExistsError(f"agent name {new!r} is already occupied")
-            previous = read_document(path / "agent.cfg")
-            tree = yapyon.merge(previous)
-            if tree.root.kind != "mapping" or set(tree.keys()) != {"agent"}:
-                raise ValueError("installed agent.cfg must contain only agent")
-            self._validate_agent(tree["agent"])
-            tree["agent"].merge(yio.value_tree({"name": new}))
-            record = data["agents"].pop(old)
-            data["agents"][new] = record
-            write_document(tree, path / "agent.cfg", overwrite=True)
-            try:
-                self._write_agents(data)
-            except BaseException:
-                write_document(previous, path / "agent.cfg", overwrite=True)
-                raise
-            return path
+        path = self.locate(old)
+        definition = read_document(path / "agent.cfg")
+        return self.commit(self.prepare_update(old, definition, new_name=new))
 
     def unregister(self, name):
         with self._locked():
@@ -520,9 +467,18 @@ class AgentStore:
             self._write_agents(data)
 
     def load(self, name):
-        path = self.locate(name)
+        validate_id(name)
+        registry_signature = self._signature(self.registry_path)
+        data = self._read()
+        if name not in data["agents"]:
+            raise ValueError(f"unknown agent {name!r}")
+        path = Path(data["agents"][name]["path"])
         config = path / "agent.cfg"
-        definition = read_document(config)
+        text = read_text(config)
+        definition = yapyon.parse(text, source=str(config))
         if definition.root.kind != "mapping" or set(definition.keys()) != {"agent"}:
             raise ValueError("installed agent.cfg must contain only agent")
-        return self._assemble(definition, name, path, self._read())
+        result = self._assemble(definition, name, path, data)
+        if self._signature(config) != text or self._signature(self.registry_path) != registry_signature:
+            raise ValueError("agent source or settings changed during resolution; retry the operation")
+        return result

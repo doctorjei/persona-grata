@@ -7,7 +7,8 @@
 # `mind.dialects.<name>`, which the persona overrides where a protocol is mounted off the root.
 
 dialect:
-  name: "base_dialect"
+  name: "builtin_dialect"
+
   api_uri: y"{endpoint}"                         # Where this protocol is mounted
   msg_uri: y"{api_uri}/v1/chat/completions"      # Completion/message op. (default OpenAI std)
   model_uri: y"{api_uri}/v1/models"              # Model listing op. (default OpenAI std)

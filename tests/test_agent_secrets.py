@@ -4,6 +4,7 @@ import pytest
 import yapyon
 
 from persona_grata import AgentStore, make_agent
+from persona_grata.schema import FORMAT
 from persona_grata import yapyon_io as yio
 
 
@@ -50,7 +51,7 @@ def test_none_default_root_uses_agent_name_without_becoming_keyless(store, backe
     assert resolved["agent"]["harness"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
 
 
-@pytest.mark.parametrize("selection", ["secret<>", "secret<pass.secret>"])
+@pytest.mark.parametrize("selection", ["secret<>", "secret<secret.pass>"])
 def test_none_agent_root_overrides_nonempty_default(store, selection):
     store.configure(defaults={"secret": {"backend": "pass", "root": "team/keys"}})
     path = store.create("scout", agent_with_secret(f"{selection}: {{root: None}}"))
@@ -67,7 +68,7 @@ def test_none_agent_root_overrides_nonempty_default(store, selection):
 
 def test_explicit_backend_overrides_runtime_default(store):
     store.configure(defaults={"secret": {"backend": "pass"}})
-    store.create("scout", agent_with_secret('secret<gopass.secret>: {root: "other/keys"}'))
+    store.create("scout", agent_with_secret('secret<secret.gopass>: {root: "other/keys"}'))
     resolved = store.load("scout")
     assert resolved["runtime"]["secret_backend"]["name"] == "pass"
     assert resolved["agent"]["secret"]["name"] == "gopass"
@@ -76,11 +77,23 @@ def test_explicit_backend_overrides_runtime_default(store):
 
 
 def test_explicit_backend_does_not_require_a_store_default(store):
-    store.create("scout", agent_with_secret('secret<pass.secret>: {}'))
+    store.create("scout", agent_with_secret('secret<secret.pass>: {}'))
     resolved = store.load("scout")
     assert resolved["runtime"]["secret_backend"] == {}
     assert resolved["agent"]["secret"]["name"] == "pass"
     assert resolved["agent"]["secret"]["entry"] == "agents/scout"
+
+
+@pytest.mark.parametrize("backend", ["pass", "gopass", "prs"])
+def test_explicit_backend_with_none_root_is_unprefixed(store, backend):
+    store.create("scout", agent_with_secret(f'secret<secret.{backend}>: {{root: None}}'))
+    resolved = store.load("scout")
+    assert resolved["runtime"]["secret_backend"] == {}
+    secret = resolved["agent"]["secret"]
+    assert secret["name"] == backend
+    assert secret["root"] is None
+    assert secret["entry"] == "scout"
+    assert secret["fetch"].endswith(" scout")
 
 
 @pytest.mark.parametrize("root", ["unused/prefix", None])
@@ -112,7 +125,7 @@ def test_explicit_keyless_stays_keyless_despite_default_backend(store, root):
     resolved = store.load("local")
     assert resolved["agent"]["secret"] is None
     assert resolved["runtime"]["secret_backend"]["name"] == "pass"
-    assert resolved["agent"]["harness"]["auth_var"] == ""
+    assert resolved["agent"]["harness"]["auth_var"] == "ANTHROPIC_AUTH_TOKEN"
 
 
 def test_omitted_saved_secret_uses_default_without_rewriting_source(store):
@@ -138,16 +151,16 @@ def test_implicit_keyless_is_persisted_before_later_setup(store):
 
 
 def test_custom_named_backend_is_materialized_and_reusable(store, monkeypatch):
-    component = store.root / "secrets/custom.secret.tmpl"
+    component = store.root / "shared/secret/custom.tmpl"
     component.parent.mkdir(parents=True)
-    component.write_text('''secret<base.secret>:
+    component.write_text('''secret<secret._DEFAULT_>:
   name: "custom"
   fetch: y"custom-read {entry}"
   store: y"custom-write {entry}"
   probe: "custom-read"
   check: "custom-ready"
 ''')
-    store.create("scout", agent_with_secret('secret<custom.secret>: {}'))
+    store.create("scout", agent_with_secret('secret<secret.custom>: {}'))
     monkeypatch.setattr("persona_grata.store.load_preset", lambda *args: pytest.fail("bundled lookup"))
     resolved = store.load("scout")
     assert resolved["agent"]["secret"]["name"] == "custom"
@@ -166,7 +179,7 @@ def test_inline_backend_can_be_independent_of_default(store):
   probe: "private-read"
 '''))
     secret = store.load("scout")["agent"]["secret"]
-    assert secret == {"name": "private", "entry": "shared/private-key",
+    assert secret == {"name": "private", "root": "agents", "entry": "shared/private-key",
                       "fetch": "private-read shared/private-key",
                       "store": "private-write shared/private-key", "probe": "private-read"}
 
@@ -188,7 +201,7 @@ def test_read_only_inline_backend_keeps_explicit_optional_none_values(store):
 def test_default_backend_changes_affect_inherited_agents_not_explicit_ones(store):
     store.configure(defaults={"secret": {"backend": "pass"}})
     store.create("inherited", make_agent("minimax", "claude"))
-    store.create("fixed", agent_with_secret('secret<pass.secret>: {}'))
+    store.create("fixed", agent_with_secret('secret<secret.pass>: {}'))
     store.configure(defaults={"secret": {"backend": "gopass"}})
     assert store.load("inherited")["agent"]["secret"]["name"] == "gopass"
     assert store.load("fixed")["agent"]["secret"]["name"] == "pass"
@@ -209,7 +222,7 @@ def test_name_default_follows_rename_but_explicit_entry_does_not(store, root):
 
 @pytest.mark.parametrize("entry", ["../outside", "/absolute", "-option", "a//b", "line\nbreak", ""])
 def test_complete_entry_validation_is_still_applied(store, entry):
-    secret = yapyon.parse('secret<pass.secret>: {}')
+    secret = yapyon.parse('secret<secret.pass>: {}')
     secret["secret"].merge(yio.value_tree({"entry": entry}))
     definition = agent_with_secret(secret.to_source())
     with pytest.raises(ValueError, match="secret entry"):
@@ -223,4 +236,4 @@ def test_sparse_registry_is_preserved_through_create_rename_and_unregister(store
     store.rename("before", "after")
     store.unregister("after")
     saved = yapyon.loads_record(store.registry_path.read_text())
-    assert saved == {"defaults": {"secret": {"root": "team"}}, "agents": {}}
+    assert saved == {"format": FORMAT, "defaults": {"secret": {"root": "team"}}, "agents": {}}

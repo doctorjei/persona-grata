@@ -80,11 +80,13 @@ dialect or that every pairing has been tested against a live harness.
 
 An agent's name is independent of its persona, harness, and directory. Several agents may use the
 same persona and harness. Without `--name`, creation uses `<persona>_<harness>` as its name and
-places it in `<agent-store>/store/<creation-name>/`. `--path` selects a different agent directory.
+places it in `<agent-store>/entries/<creation-name>/` by default. `paths.entries` changes that
+convention; `--path` selects a different agent directory.
 
 The registry maps each name to its absolute directory. Renaming an agent changes its name and
 wrapper, not its directory; no symlinks connect names to paths. Names are 1–64 ASCII letters,
-digits, and `_`, and cannot start with a digit. `default` and shell reserved words cannot be agent names.
+digits, and `_`, and cannot start with a digit. Exact lowercase `default` is reserved. Shell reserved
+words are valid storage names, but PG refuses to install shell functions for them; use `--no-wrapper`.
 
 ### Lifecycle
 
@@ -109,17 +111,17 @@ CLI flags:
 **orion.cfg**
 
 ```yapyon
-agent<base.agent>:
+agent<agent._DEFAULT_>:
   name: "orion"
   secret: None
-  persona<base.persona>:
+  persona<persona._DEFAULT_>:
     name: "orion"
     desc: "Orion Toolkit"
     mind:
       endpoint: "https://api.cybertron.space"
       model_list: ["alpha-3-on"]
       model_active: "alpha-3-on"
-  harness<claude.harness>: {}
+  harness<harness.claude>: {}
 ```
 
 ```bash
@@ -168,16 +170,29 @@ then `~/.config/agents`. `<agent-store>/agent_store.cfg` contains explicit store
 and the name-to-path registry; packaged defaults supply omitted settings. Default credential settings
 are `defaults.secret.backend` and `defaults.secret.root`. Installed agents have
 `<agent-directory>/agent.cfg` and `<agent-directory>/harness/`.
-Composed components used by agents are stored in `<agent-store>/personas/`, `<agent-store>/harnesses/`,
-`<agent-store>/dialects/`, and `<agent-store>/secrets/`; the entire bundled template library is not
-copied into the store.
+Source dependencies live beneath the configured `paths.shared` include root, normally
+`<agent-store>/shared/`. Every qualified label uses that same root: `persona.kimi` selects
+`shared/persona/kimi.tmpl`, including from another shared file. Only used components are provisioned
+during explicit creation/setup; reads never fall back to the package catalog or copy missing files.
+
+Packaged sources use the same namespace layout: `data/<kind>/<name>.tmpl`. Each category has a
+`_BUILTIN_` template for its baseline and a `_DEFAULT_` forwarding template. Concrete presets inherit
+through `_DEFAULT_`; those placeholders do not yet implement the planned config-default wiring.
+These are ordinary source documents, not extra precedence tiers or instructions to distribute settings.
 
 Documents use [yapyon](https://pypi.org/project/yapyon/) (version 0.6.5 or newer within the 0.6 series), not YAML:
 quote strings, use `None` / `True` / `False`, and write references as `y"{persona.mind.endpoint}"`.
-Named slots such as `persona<kimi.persona>` compose presets; `(persona.mind.model_list)` copies
+Named slots such as `persona<persona.kimi>` compose presets; `(persona.mind.model_list)` copies
 a whole value without converting it to text. Runtime supplies the agent directory, effective store
 defaults, and default secret backend; credential operations use each agent's selected backend.
 Agent documents cannot set `agent.path`.
+
+This development version targets candidate profile `agents-yapyon-v0.6.5`; known deferred-record
+binding defects still prevent full core conformance (see the Config Reference Manual). Older markers,
+including `v0.1`, are not aliases and are not migrated automatically. Defaults are specification,
+then store-config, then file settings; a reused base is ordinary file source, not a fourth tier.
+Keyless selection does not clear authored authentication references or prove a native client can
+start without a key. Native/client/provider acceptance remains separate from store resolution.
 
 Saved documents preserve unfinished slots and expressions, but their comments and layout are
 normalized. Safe merges are compacted; necessary slot/composition layers remain explicit. Source

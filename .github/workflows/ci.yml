@@ -38,11 +38,13 @@ jobs:
       - name: Verify presets ship in the wheel
         run: |
           python -m zipfile -l dist/*.whl > wheel.txt
-          for f in global.tmpl agents/base.agent.tmpl \
-                   agents/minimax_claude.agent.tmpl personas/base.persona.tmpl \
-                   personas/kimi.persona.tmpl harnesses/claude.harness.tmpl \
-                   harnesses/codex.harness.tmpl dialects/chat.dialect.tmpl \
-                   secrets/pass.secret.tmpl agent_store-defaults.cfg; do
+          for f in global.tmpl agent_store-defaults.cfg \
+                   agent/_BUILTIN_.tmpl agent/_DEFAULT_.tmpl agent/minimax_claude.tmpl \
+                   persona/_BUILTIN_.tmpl persona/_DEFAULT_.tmpl persona/kimi.tmpl \
+                   harness/_BUILTIN_.tmpl harness/_DEFAULT_.tmpl \
+                   harness/claude.tmpl harness/codex.tmpl \
+                   dialect/_BUILTIN_.tmpl dialect/_DEFAULT_.tmpl dialect/chat.tmpl \
+                   secret/_BUILTIN_.tmpl secret/_DEFAULT_.tmpl secret/pass.tmpl; do
             grep -q "persona_grata/data/$f" wheel.txt || { echo "missing from wheel: $f"; exit 1; }
           done
       - name: Verify the installed console scripts run

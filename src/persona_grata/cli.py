@@ -117,14 +117,15 @@ def _confirm(name):
 
 
 def _definition(path):
-    from .composition import compose, read_document
+    from .composition import read_document
 
     path = Path(path).expanduser()
     if not path.is_file():
         raise ValueError(f"agent source must be a regular file: {path}")
-    tree = compose(read_document(path.resolve()), kinds={"agent"})
-    if "agent" not in tree or tree["agent"].kind != "mapping":
-        raise ValueError("an agent source must contain an agent mapping")
+    tree = read_document(path.resolve())
+    if (tree.root.kind != "mapping" or set(tree.keys()) != {"agent"}
+            or tree["agent"].kind not in {"mapping", "slot"}):
+        raise ValueError("an agent source must contain only an agent mapping or named slot")
     return tree
 
 
@@ -136,7 +137,7 @@ def _stored_config(store, name):
 
 
 def _source_name(tree):
-    branch = tree["agent"]
+    branch = tree["agent"].overrides if tree["agent"].kind == "slot" else tree["agent"]
     if "name" not in branch or branch["name"].kind != "scalar" or branch["name"].type != "str":
         raise ValueError("source needs a literal agent.name, or choose one with --name")
     return branch["name"].value
@@ -172,7 +173,7 @@ def _run(args, parser, token):
     elif args.selection and not args.create:
         validate_id(args.selection[0])
 
-    store = AgentStore(root=Path(args.store).expanduser() if args.store is not None else None)
+    store = AgentStore(root=args.store)
     if args.setup:
         from .installation import setup_store
 

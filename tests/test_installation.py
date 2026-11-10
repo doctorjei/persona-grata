@@ -17,6 +17,11 @@ from unittest.mock import Mock
 import pytest
 
 from persona_grata import installation as inst
+from persona_grata.identifiers import validate_id
+
+
+SHELL_WORDS = ("if", "then", "else", "elif", "fi", "do", "done", "case", "esac",
+               "while", "until", "for", "in", "function", "select", "time", "coproc")
 
 
 class Store:
@@ -41,7 +46,7 @@ class Store:
                 "secret": None if keyless else copy.deepcopy(manager or {}),
                 "harness": {
                     "name": "fake-harness", "path": str(path / "harness"),
-                    "config_file": str(path / "harness" / "config.json"),
+                    "config_file": "config.json",
                     "content": '{"model": "orion"}\n',
                     "path_var": "HARNESS_HOME", "auth_var": "API_KEY",
                     "wrapper_env": {},
@@ -302,6 +307,27 @@ def test_wrapper_executes_with_literal_values_and_forwards_arguments(home, fake_
     assert not (home / "PWNED").exists()
 
 
+@pytest.mark.parametrize("configured_auth", [None, "", "wrapper-auth"])
+def test_keyless_wrapper_preserves_inherited_or_explicit_auth(home, monkeypatch, configured_auth):
+    monkeypatch.setenv("API_KEY", "inherited-auth")
+    harness = harness_probe(home, monkeypatch)
+    if configured_auth is not None:
+        harness["wrapper_env"]["API_KEY"] = configured_auth
+    before = copy.deepcopy(harness)
+    wrapper = inst.render_wrapper("orion", harness)
+    result = run_wrapper(home, wrapper)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["key"] == ("inherited-auth" if configured_auth is None else configured_auth)
+    assert harness == before
+    assert "_pg_token" not in wrapper
+
+
+@pytest.mark.parametrize("value", [None, False, 0, {}, []])
+def test_wrapper_refuses_nonstring_environment_values(value):
+    with pytest.raises(ValueError, match="must be strings"):
+        inst.render_wrapper("orion", {"name": "true", "wrapper_env": {"EXTRA": value}})
+
+
 @pytest.mark.parametrize("mode", ["error", "empty"])
 def test_wrapper_does_not_launch_on_failed_or_empty_fetch(home, fake_manager, monkeypatch, mode):
     manager, data = fake_manager
@@ -328,10 +354,45 @@ def test_wrapper_refuses_auth_shadowing(fake_manager):
         inst.render_wrapper("orion", {"name": "true", "auth_var": "KEY", "wrapper_env": {"KEY": "wrong"}}, manager)
 
 
-def test_reserved_function_names_and_internal_variable_collisions_are_refused():
-    for name in ("if", "time", "while"):
-        with pytest.raises(ValueError, match="reserved shell"):
-            inst.render_wrapper(name, {"name": "true"})
+@pytest.mark.parametrize("name", SHELL_WORDS)
+def test_shell_words_are_storage_names_but_wrapper_install_refuses_before_writes(store, home, monkeypatch, name):
+    assert validate_id(name) == name
+    assert validate_id(name, "persona") == name
+    path = store.add(name=name, manager={"name": "must-not-run"}, keyless=False)
+    probe = Mock(side_effect=AssertionError("manager must not run"))
+    monkeypatch.setattr(inst, "_secret_probe", probe)
+    with pytest.raises(ValueError, match="reserved shell word"):
+        inst.install_agent(store, name, token="SECRET")
+    with pytest.raises(ValueError, match="reserved shell word"):
+        inst.install_shell_wrapper(name, {"name": "true"})
+    probe.assert_not_called()
+    assert not (path / "harness").exists()
+    assert not (home / ".bashrc").exists()
+
+
+@pytest.mark.parametrize("name", SHELL_WORDS)
+def test_shell_word_can_install_native_snapshot_without_a_wrapper(store, home, name):
+    path = store.add(name=name)
+    assert inst.install_agent(store, name, install_wrapper=False) == path
+    assert (path / "harness" / "config.json").is_file()
+    assert not (home / ".bashrc").exists()
+
+
+@pytest.mark.parametrize("name", ["", "default", "9agent", "café", "bad-name", "bad/name", "a" * 65])
+def test_storage_name_validation_keeps_ascii_length_and_exact_default_reservation(name):
+    with pytest.raises(ValueError):
+        validate_id(name)
+    with pytest.raises(ValueError):
+        inst.render_wrapper(name, {"name": "true"})
+
+
+@pytest.mark.parametrize("name", ["Default", "DEFAULT", "If", "_", "a" * 64])
+def test_case_distinct_and_maximum_length_names_remain_valid(name):
+    assert validate_id(name) == name
+    assert f"{name}() (" in inst.render_wrapper(name, {"name": "true"})
+
+
+def test_internal_wrapper_variable_collisions_are_refused():
     with pytest.raises(ValueError, match="internal"):
         inst.render_wrapper("orion", {"name": "true", "wrapper_env": {"_pg_token": "clobber"}})
 
@@ -348,10 +409,11 @@ def test_wrapper_disables_inherited_xtrace_before_fetch(home, fake_manager):
     assert "_pg_token=" not in result.stderr
 
 
-def test_wrapper_only_harness_needs_no_native_file(store):
+@pytest.mark.parametrize("filename", [None, ""])
+def test_wrapper_only_harness_needs_no_native_file(store, filename):
     path = store.add()
     harness = store.definitions["orion"]["agent"]["harness"]
-    harness["config_file"] = ""
+    harness["config_file"] = filename
     harness["content"] = ""
     inst.install_agent(store, "orion")
     assert list((path / "harness").iterdir()) == [path / "harness" / inst._OWNER_FILE]
@@ -581,12 +643,52 @@ def test_private_write_tightens_mode_and_follows_user_selected_symlink(home):
     assert file.read_text() == "through-link"
 
 
-def test_native_config_cannot_escape_harness_dir(store, home):
+@pytest.mark.parametrize("filename", ["../outside.json", "nested/../config.json", "/outside.json", "bad\x00name"])
+def test_native_config_refuses_absolute_traversal_and_nul_before_writes(store, home, filename):
+    path = store.add()
+    harness = store.definitions["orion"]["agent"]["harness"]
+    harness["config_file"] = filename
+    with pytest.raises(ValueError, match="relative"):
+        inst.install_agent(store, "orion")
+    assert not (path / "harness").exists()
+    assert not (home / ".bashrc").exists()
+
+
+def test_absolute_native_config_is_refused_even_inside_harness_dir(store):
+    path = store.add()
+    store.definitions["orion"]["agent"]["harness"]["config_file"] = str(path / "harness" / "config.json")
+    with pytest.raises(ValueError, match="relative"):
+        inst.install_agent(store, "orion")
+    assert not (path / "harness").exists()
+
+
+@pytest.mark.parametrize("filename", [False, 0, [], {}])
+def test_native_config_refuses_nonstring_filenames(store, filename):
+    path = store.add()
+    store.definitions["orion"]["agent"]["harness"]["config_file"] = filename
+    with pytest.raises(ValueError, match="relative filename"):
+        inst.install_agent(store, "orion")
+    assert not (path / "harness").exists()
+
+
+def test_native_config_joins_relative_subdirectories_to_harness_not_cwd(store, home, monkeypatch):
+    path = store.add()
+    cwd = home / "working"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    harness = store.definitions["orion"]["agent"]["harness"]
+    harness["config_file"] = "nested/settings.json"
+    plan = inst.prepare_installation(store.load("orion"), install_wrapper=False)
+    assert plan.native_file == path / "harness" / "nested" / "settings.json"
+    assert not (path / "harness").exists()
+    inst.apply_installation(plan)
+    assert plan.native_file.read_text() == harness["content"]
+    assert not (cwd / "nested").exists()
+
+
+def test_native_config_directory_must_stay_at_registered_harness_dir(store, home):
     store.add()
     harness = store.definitions["orion"]["agent"]["harness"]
-    harness["config_file"] = str(home / "outside.json")
-    with pytest.raises(ValueError, match="inside"):
-        inst.install_agent(store, "orion")
     harness["path"] = str(home / "outside")
     with pytest.raises(ValueError, match="harness/"):
         inst.install_agent(store, "orion")
@@ -600,6 +702,29 @@ def test_native_directory_symlink_receives_installation(store, home):
     inst.install_agent(store, "orion")
     assert (external / "config.json").is_file()
     assert (external / inst._OWNER_FILE).is_file()
+
+
+@pytest.mark.parametrize("link_location", ["file", "parent"])
+def test_relative_native_filename_preserves_user_selected_links(store, home, link_location):
+    path = store.add()
+    native = path / "harness"
+    native.mkdir()
+    (native / inst._OWNER_FILE).write_text(json.dumps({"agent_path": str(path)}))
+    external = home / "external-config"
+    external.mkdir()
+    target = external / "config.json"
+    target.write_text("existing")
+    harness = store.definitions["orion"]["agent"]["harness"]
+    if link_location == "file":
+        link = native / "config.json"
+        link.symlink_to(target)
+    else:
+        link = native / "nested"
+        link.symlink_to(external, target_is_directory=True)
+        harness["config_file"] = "nested/config.json"
+    inst.install_agent(store, "orion", install_wrapper=False)
+    assert link.is_symlink()
+    assert target.read_text() == harness["content"]
 
 
 def test_removal_defaults_to_no_and_retains_registration(store):
@@ -739,6 +864,7 @@ def test_setup_real_store_persists_only_nested_overrides(home, monkeypatch):
     result = inst.setup_store(store, backend="pass", secret_root="team/keys")
     assert result["defaults"]["secret"] == {"backend": "pass", "root": "team/keys"}
     assert yapyon.loads_record(store.registry_path.read_text()) == {
+        "format": "agents-yapyon-v0.6.5",
         "defaults": {"secret": {"backend": "pass", "root": "team/keys"}}}
 
 
@@ -776,9 +902,9 @@ def test_actual_store_keyless_create_install_rename_remove(home, harness):
 
     store = AgentStore(home / "real-store")
     definition = yapyon.parse(
-        'agent<base.agent>:\n  persona<ollama.persona>:\n'
+        'agent<agent._DEFAULT_>:\n  persona<persona.ollama>:\n'
         '    mind:\n      model_list: ["example-model"]\n'
-        f'  harness<{harness}.harness>: {{}}\n  secret: None\n')
+        f'  harness<harness.{harness}>: {{}}\n  secret: None\n')
     path = store.create("orion", definition)
     assert inst.install_agent(store, "orion") == path
     assert (path / "harness").is_dir()
@@ -789,7 +915,7 @@ def test_actual_store_keyless_create_install_rename_remove(home, harness):
     assert inst.remove_agent(store, "renamed", confirm=True)
     assert not path.exists()
     assert store.agents() == {}
-    assert (store.root / "personas" / "ollama.persona.tmpl").is_file()
+    assert (store.root / "shared" / "persona" / "ollama.tmpl").is_file()
 
 
 def test_actual_store_removal_unlinks_registered_agent_symlink_only(home):
@@ -798,8 +924,8 @@ def test_actual_store_removal_unlinks_registered_agent_symlink_only(home):
 
     store = AgentStore(home / "real-store")
     definition = yapyon.parse(
-        'agent<base.agent>:\n  persona<ollama.persona>: {}\n'
-        '  harness<claude.harness>: {}\n  secret: None\n')
+        'agent<agent._DEFAULT_>:\n  persona<persona.ollama>: {}\n'
+        '  harness<harness.claude>: {}\n  secret: None\n')
     path = store.create("orion", definition)
     target = home / "preserved-agent"
     path.rename(target)
@@ -827,9 +953,9 @@ def test_actual_store_complete_secret_uses_presets_without_shell_splitting(home,
     store.configure(defaults={"secret": {"backend": backend, "root": "team root's"}})
     entry = "custom key's name;$(touch PWNED)"
     definition = yapyon.parse(
-        'agent<base.agent>:\n  persona<ollama.persona>:\n'
+        'agent<agent._DEFAULT_>:\n  persona<persona.ollama>:\n'
         '    mind:\n      model_list: ["example-model"]\n'
-        '  harness<codex.harness>: {}\n  secret<>:\n    entry: ' + json.dumps(entry) + '\n')
+        '  harness<harness.codex>: {}\n  secret<>:\n    entry: ' + json.dumps(entry) + '\n')
     path = store.create("orion", definition)
     inst.install_agent(store, "orion", token="SECRET", install_wrapper=False)
     expected = entry

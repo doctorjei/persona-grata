@@ -8,6 +8,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** implement candidate `agents-yapyon-v0.6.5`; old markers are rejected without aliases
+  or automatic migration. Registry paths use `paths.shared` / `paths.entries`, and environment policy
+  uses `env_vars.from_host` / `env_vars.additions`.
+- Resolve qualified includes from one configured shared root (`persona.kimi` → `shared/persona/kimi.tmpl`),
+  including nested/deeper labels and retained agent inheritance. Reads do not use the package catalog.
+- Apply recursive specification-defined defaults before final resolution, below all file settings.
+  Preserve explicit empty/None data, source replacements, identity exclusions and deferred expressions.
+- Preserve authored authentication references/native entries regardless of secret selection. Storage
+  accepts shell words; wrapper installation refuses names it cannot expose safely.
+- Native `config_file` values are relative to the fixed harness directory.
+- Package templates under singular `data/<kind>/<name>.tmpl` paths. Concrete presets inherit through
+  `_DEFAULT_` into `_BUILTIN_`; the `_DEFAULT_` templates currently forward without config-value overrides.
+
+### Fixed
+
+- Codex omits an unused `env_key` through explicit conditional/output-copy filtering instead of emitting
+  an empty variable name; raw configuration is retained.
+- Detect intervening include-source edits during prepared writes, including semantically equal edits.
+- Align packaged lookup, generated/example includes and CI/release wheel checks with the current catalog.
+  Compose the model-test fixture through the full inheritance chain and fail exhaustive discovery if a
+  bundled category or persona/harness inventory is empty.
+
+### Known Issues
+
+- Full candidate-profile conformance remains incomplete. Some valid deferred schema-record bindings
+  are rejected, and the current defaults binder has not yet been replaced by ordinary yapyon composition.
+
 ## [0.0.7] — 2026-11-08
 
 ### Added

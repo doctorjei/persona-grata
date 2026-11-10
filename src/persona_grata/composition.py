@@ -12,27 +12,29 @@ from .identifiers import validate_id
 
 DATA_DIR = Path(__file__).parent / "data"
 KIND_DIRS = {
-    "agent": "agents",
-    "persona": "personas",
-    "harness": "harnesses",
-    "dialect": "dialects",
-    "secret": "secrets",
+    "agent": "agent",
+    "persona": "persona",
+    "harness": "harness",
+    "dialect": "dialect",
+    "secret": "secret",
 }
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 
 
 def _check_label(label):
-    if len(label) != 2 or label[1] not in KIND_DIRS:
-        raise ValueError("a preset label must be <id>.<kind>: " + ".".join(label))
-    name, kind = label
-    validate_id(name, kind)
+    if not label:
+        raise ValueError("an include label must have at least one name segment")
+    for segment in label:
+        validate_id(segment, "include segment")
 
 
 def load_preset(label, *, data_dir=DATA_DIR):
-    """Read an explicit ``(id, kind)`` from one catalog; never evaluate it."""
+    """Read an explicitly selected packaged ``kind.name``; never evaluate it."""
     _check_label(label)
-    name, kind = label
-    path = Path(data_dir) / KIND_DIRS[kind] / f"{name}.{kind}.tmpl"
+    if len(label) != 2 or label[0] not in KIND_DIRS:
+        raise FileNotFoundError("no packaged preset for " + ".".join(label))
+    kind, name = label
+    path = Path(data_dir) / KIND_DIRS[kind] / f"{name}.tmpl"
     return read_document(path)
 
 
@@ -85,41 +87,46 @@ def compose(tree, *, kinds=None, lookup=load_preset, max_fills=1000):
     result = yapyon.merge(tree)
     result.source = tree.source
     result.warnings = list(tree.warnings)
-    history = {}
+    ancestry = {}
     fills = 0
     while True:
         for slot in result.slots():
             label = slot.label
-            if not label:
-                continue
-            if kinds is not None and len(label) >= 2 and label[1] not in kinds:
+            if not label or (kinds is not None and label[0] not in kinds):
                 continue
             try:
                 _check_label(label)
             except ValueError as exc:
                 raise _slot_error(slot, str(exc)) from exc
-
-            previous = history.setdefault(slot.path, [])
-            if label in previous:
-                chain = " -> ".join(".".join(item) for item in [*previous, label])
+            ancestors = [path for path in ancestry if slot.path[:len(path)] == path]
+            history = ancestry[max(ancestors, key=len)] if ancestors else ()
+            state = (label, slot.overrides.to_source())
+            if state in history:
+                chain = " -> ".join(".".join(item[0]) for item in (*history, state))
                 raise _slot_error(slot, f"preset inheritance cycle: {chain}")
-            if fills >= max_fills:
-                raise _slot_error(
-                    slot, f"preset expansion exceeds {max_fills} fills; "
-                    "check for recursive presets")
+            if fills >= max_fills or len(history) >= 64:
+                raise _slot_error(slot, f"preset expansion exceeds {max_fills} fills or depth 64")
             try:
-                filler = lookup(label)
+                loaded = lookup(label)
             except FileNotFoundError as exc:
                 raise _slot_error(slot, f"preset {'.'.join(label)!r} not found: {exc}") from exc
-            if label[1] == "agent":
-                agent = filler["agent"] if isinstance(filler, yapyon.Tree) else filler
-                if (agent.kind == "mapping" and "secret" in agent and agent["secret"].kind == "slot"
-                        and not agent["secret"].label and "secret" not in slot.overrides):
-                    slot.merge(yapyon.parse("secret<>: {}"))
+            if isinstance(loaded, yapyon.Tree):
+                if (loaded.root.kind != "mapping" or len(loaded.keys()) != 1
+                        or "runtime" in loaded
+                        or not isinstance(next(iter(loaded.keys())), str)):
+                    raise _slot_error(slot, "include must contain one literal non-runtime branch")
+                filler = loaded[next(iter(loaded.keys()))]
+                result.warnings.extend(loaded.warnings)
+            else:
+                filler = loaded
+            if (slot.path == ("agent",) and filler.kind == "mapping"
+                    and "secret" in filler and filler["secret"].kind == "slot"
+                    and not filler["secret"].label and "secret" not in slot.overrides):
+                slot.merge(yapyon.parse("secret<>: {}"))
+            ancestry = {path: chain for path, chain in ancestry.items()
+                        if path[:len(slot.path)] != slot.path}
+            ancestry[slot.path] = (*history, state)
             slot.fill(filler)
-            if isinstance(filler, yapyon.Tree):
-                result.warnings.extend(filler.warnings)
-            previous.append(label)
             fills += 1
             break
         else:
@@ -128,13 +135,13 @@ def compose(tree, *, kinds=None, lookup=load_preset, max_fills=1000):
 
 def compose_preset(kind, name, *, lookup=load_preset, max_fills=1000):
     """Collapse one category's inheritance, leaving other categories as slots."""
-    label = (name, kind)
+    label = (kind, name)
     _check_label(label)
     tree = lookup(label)
     if not isinstance(tree, yapyon.Tree):
         raise TypeError("a category document must be a yapyon Tree")
     if kind not in tree:
-        raise ValueError(f"preset {name}.{kind!s} has no {kind!r} branch")
+        raise ValueError(f"preset {kind}.{name!s} has no {kind!r} branch")
     return compose(tree, kinds={kind}, lookup=lookup, max_fills=max_fills)
 
 

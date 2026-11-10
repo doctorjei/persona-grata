@@ -82,7 +82,7 @@ def test_stored_model_comprehension_needs_no_contract(tmp_path, models):
         f"      model_list:= {models!r}\n      model_active: \"chosen\"\n"))
     store = AgentStore(tmp_path / "agents")
     store.create("models", definition)
-    source = read_document(store.root / "harnesses/codex.harness.tmpl").to_source()
+    source = read_document(store.root / "shared/harness/codex.tmpl").to_source()
     assert "for model_id in persona.mind.model_list" in source
     assert "GEN_CODEX_MODEL_TABLE" not in source and "MATCH_FIRST" not in source
     result = store.load("models")
@@ -103,7 +103,7 @@ def test_stored_claude_config_omits_empty_mapping_merge(tmp_path, models):
         "      payload: {null: None, empty: {}, items: [], zero: 0, flag: False}\n"))
     store = AgentStore(tmp_path / "agents")
     store.create("compact", definition)
-    source = (store.root / "harnesses/claude.harness.tmpl").read_text()
+    source = (store.root / "shared/harness/claude.tmpl").read_text()
     assert "  config_store:\n    {}\n    |\n" not in source
     assert "for name, value in" not in source
     assert "__not_none__().__as_json__()" in source
@@ -179,7 +179,7 @@ def test_json_none_removal_is_explicit_and_preserves_source(tmp_path, content, c
     assert harness["config_store"]["payload"] == payload
 
 
-def test_toml_null_behavior_is_upstreams_not_pg_cleanup(tmp_path):
+def test_codex_explicit_null_copy_filter_preserves_raw_data(tmp_path):
     definition = yapyon.merge(make_agent("minimax", "codex"), yio.value_tree({
         "agent": {"harness": {"config_store": {"payload": {"explicit_null": None, "blank": ""}}}}}))
     store = AgentStore(tmp_path / "agents")
@@ -189,4 +189,4 @@ def test_toml_null_behavior_is_upstreams_not_pg_cleanup(tmp_path):
     assert harness["config_store"]["payload"]["explicit_null"] is None
     assert payload["blank"] == ""
     assert "explicit_null" not in payload
-    assert payload["@_lexemes"]["explicit_null"] == "None"
+    assert "@_lexemes" not in payload

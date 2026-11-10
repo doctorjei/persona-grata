@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 
 from .composition import check_write_path
+from .identifiers import validate_id
 
 
 _SECRET_TIMEOUT = 120
@@ -391,17 +392,27 @@ def _safe_agent_path(store, name):
 
 
 def _native_paths(agent_path, harness):
-    config_dir = _absolute(harness.get("path") or agent_path / "harness")
     expected = agent_path / "harness"
+    path = harness.get("path", str(expected))
+    if (not isinstance(path, str) or not path or "\x00" in path
+            or ".." in Path(path).parts):
+        _fail("Harness config directory must be a nonempty path without NUL or '..' segments.")
+    config_dir = _absolute(path)
     if config_dir != expected:
         _fail("Harness config directory must be the registered agent's harness/ directory.")
     if config_dir.exists() and not config_dir.is_dir():
         _fail(f"Harness config directory is occupied by a file: {config_dir}.")
     config_file = harness.get("config_file")
-    native_file = _absolute(config_file) if config_file else None
-    if native_file is not None:
-        if native_file == config_dir or config_dir not in native_file.parents:
-            _fail("Native config file must be inside the agent's harness/ directory.")
+    if config_file is not None and not isinstance(config_file, str):
+        _fail("Native config file must be a relative filename, None, or an empty string.")
+    native_file = None
+    if config_file:
+        filename = Path(config_file)
+        if "\x00" in config_file or filename.is_absolute() or ".." in filename.parts:
+            _fail("Native config file must be relative to harness/ without NUL or '..' segments.")
+        native_file = config_dir / filename
+        if native_file == config_dir:
+            _fail("Native config file must name a file inside the agent's harness/ directory.")
         for parent in native_file.parents:
             if parent == config_dir:
                 break
@@ -461,9 +472,9 @@ def _env_name(name):
 
 def render_wrapper(name, harness, manager=None, *, agent_path=None):
     """Return a POSIX wrapper; all data is shell-quoted and fetch fails closed."""
-    _env_name(name)
+    validate_id(name)
     if name in _SHELL_RESERVED:
-        _fail("Agent command name is a reserved shell word.")
+        _fail(f"Cannot install shell wrapper for agent {name!r}: command name is a reserved shell word.")
     executable = harness.get("command") or harness.get("name")
     if not isinstance(executable, str) or not executable or any(c in executable for c in ("\n", "\r", "\x00")):
         _fail("Harness must name an executable.")
@@ -479,15 +490,14 @@ def render_wrapper(name, harness, manager=None, *, agent_path=None):
     auth_var = harness.get("auth_var")
     if auth_var:
         _env_name(auth_var)
-    wrapper_env = harness.get("wrapper_env") or {}
+    wrapper_env = harness.get("wrapper_env", {})
     if not isinstance(wrapper_env, dict):
-        _fail("wrapper_env must be a mapping of POSIX variable names to scalar values.")
+        _fail("wrapper_env must be a mapping of POSIX variable names to string values.")
     for key, value in wrapper_env.items():
         _env_name(key)
-        if value not in (None, ""):
-            if not isinstance(value, (str, int, float, bool)) or "\x00" in str(value):
-                _fail("Wrapper environment values must be scalar values without NUL characters.")
-            assignments[key] = str(value)
+        if not isinstance(value, str) or "\x00" in value:
+            _fail("Wrapper environment values must be strings without NUL characters.")
+        assignments[key] = value
     if "_pg_token" in assignments:
         _fail("Wrapper configuration must not assign the reserved internal _pg_token variable.")
     if manager and auth_var and auth_var in assignments:
